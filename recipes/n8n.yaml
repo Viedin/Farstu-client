@@ -1,0 +1,10 @@
+app: n8n
+match: { images: ["n8nio/n8n", "docker.n8n.io/n8nio/n8n"] }
+upstream_port: 5678
+setup_done:
+  path: /rest/settings
+  field: data.userManagement
+  unset: [data.userManagement.showSetupOnFirstLoad] # true until the owner account exists
+  message: n8n has no owner account yet. Create it from your home network first, whoever opens a new n8n first becomes its owner
+login:
+  - { method: POST, path: /rest/login }

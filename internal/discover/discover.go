@@ -131,6 +131,8 @@ func setupProblem(ctx context.Context, upstream string, r recipes.Recipe) string
 	// Not the container IP: Nextcloud answers hosts outside its
 	// trusted_domains with 400, and always trusts localhost.
 	req.Host = "localhost"
+	// As visitors arrive: apps with an https URL (Ghost) redirect plain http.
+	req.Header.Set("X-Forwarded-Proto", "https")
 	resp, err := appClient.Do(req)
 	if err != nil {
 		return name + " is not answering yet"
@@ -142,21 +144,53 @@ func setupProblem(ctx context.Context, upstream string, r recipes.Recipe) string
 		return "Can't check whether " + name + " is set up (" + why + "). If it has no admin account yet, create it from your home network first"
 	}
 	switch want := cmp.Or(s.Status, http.StatusOK); {
-	case resp.StatusCode == want && s.Field == "":
-		return ""
 	case want != http.StatusOK && resp.StatusCode != want:
 		return notDone // e.g. answers without asking for a login
 	case resp.StatusCode != want:
 		return unsure(fmt.Sprintf("HTTP %d", resp.StatusCode))
 	}
-	var v map[string]any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&v); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return name + " is not answering yet"
+	}
+	if !strings.Contains(string(body), s.Contains) {
+		return notDone
+	}
+	if s.Field == "" && len(s.Unset) == 0 {
+		return ""
+	}
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
 		return unsure("unexpected answer")
 	}
-	if !set(v[s.Field]) {
+	if s.Field != "" && !set(lookup(v, s.Field)) || slices.ContainsFunc(s.Unset, func(p string) bool { return set(lookup(v, p)) }) {
 		return notDone
 	}
 	return ""
+}
+
+// lookup follows a dotted path into JSON: "data.account", "setup.0.status";
+// "." is the whole answer. Missing is nil.
+func lookup(v any, path string) any {
+	for _, k := range strings.Split(path, ".") {
+		switch x := v.(type) {
+		case map[string]any:
+			if k != "" {
+				v = x[k]
+			}
+		case []any:
+			i, err := strconv.Atoi(k)
+			if err != nil || i < 0 || i >= len(x) {
+				return nil
+			}
+			v = x[i]
+		default:
+			if k != "" {
+				return nil
+			}
+		}
+	}
+	return v
 }
 
 // set reports whether a JSON value is true or a non-empty list or object.

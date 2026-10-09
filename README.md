@@ -105,7 +105,10 @@ login:                               # sign-in attempts rate limited per visitor
 
 `setup_done` can also POST (`method`), or wait for a status instead of a
 field (`status: 401`: the API wants a login once there is a user), with a
-`message` saying what to do. Apps without accounts that keep nothing on the
+`message` saying what to do. `field` is a dotted JSON path (`data.account`,
+`setup.0.status`, `.` for the whole answer); `unset` lists paths that must be
+missing, false or empty (Open WebUI's `onboarding`); `contains` wants a text in
+the answer (Navidrome's HTML). Apps without accounts that keep nothing on the
 server (Excalidraw) say `no_login: true` instead. Every sign-in path counts:
 an app that also takes passwords elsewhere (Memos' REST and Connect APIs)
 lists each one.

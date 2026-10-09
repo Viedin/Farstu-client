@@ -1,0 +1,4 @@
+app: it-tools
+match: { images: ["corentinth/it-tools", "ghcr.io/corentinth/it-tools"] }
+upstream_port: 80
+no_login: true # static page; everything runs in the visitor's browser

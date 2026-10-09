@@ -1,0 +1,4 @@
+app: cyberchef
+match: { images: ["ghcr.io/gchq/cyberchef"] }
+upstream_port: 8080
+no_login: true # static page; everything runs in the visitor's browser

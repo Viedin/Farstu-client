@@ -1,0 +1,6 @@
+app: komga
+match: { images: ["gotson/komga", "ghcr.io/gotson/komga"] }
+upstream_port: 25600
+setup_done: { path: /api/v1/claim, field: isClaimed }
+# No login rate limit: Komga takes a password with any API request (basic
+# auth), there is no login path to guard.

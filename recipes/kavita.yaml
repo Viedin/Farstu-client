@@ -1,0 +1,6 @@
+app: kavita
+match: { images: ["jvmilazz0/kavita", "ghcr.io/kareadita/kavita", "linuxserver/kavita", "lscr.io/linuxserver/kavita"] }
+upstream_port: 5000
+setup_done: { path: /api/admin/exists, field: . } # the answer is just true or false
+login:
+  - { method: POST, path: /api/account/login }

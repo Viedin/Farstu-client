@@ -1,0 +1,10 @@
+app: jellyfin
+match: { images: ["jellyfin/jellyfin", "ghcr.io/jellyfin/jellyfin", "linuxserver/jellyfin", "lscr.io/linuxserver/jellyfin", "ghcr.io/linuxserver/jellyfin"] }
+upstream_port: 8096
+# Every visitor looks local through Farstu, so "Allow remote connections"
+# off does not keep anyone out once the switch is on.
+setup_done: { path: /System/Info/Public, field: StartupWizardCompleted } # false while the startup wizard is open
+login:
+  - { method: POST, path: /Users/AuthenticateByName }
+  # Not covered: the deprecated /Users/{id}/Authenticate; Jellyfin locks the
+  # account itself after a few wrong passwords.

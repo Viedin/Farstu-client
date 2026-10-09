@@ -1,0 +1,6 @@
+app: audiobookshelf
+match: { images: ["ghcr.io/advplyr/audiobookshelf", "advplyr/audiobookshelf"] }
+upstream_port: 80
+setup_done: { path: /status, field: isInit } # true once the root user exists
+login:
+  - { method: POST, path: /login }

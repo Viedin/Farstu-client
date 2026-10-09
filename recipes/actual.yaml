@@ -1,0 +1,6 @@
+app: actual
+match: { images: ["actualbudget/actual-server", "ghcr.io/actualbudget/actual-server", "ghcr.io/actualbudget/actual"] }
+upstream_port: 5006
+setup_done: { path: /account/needs-bootstrap, field: data.bootstrapped } # false until the server password is set
+login:
+  - { method: POST, path: /account/login }

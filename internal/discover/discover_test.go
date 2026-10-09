@@ -213,7 +213,7 @@ func TestSetupChecks(t *testing.T) {
 	var status int
 	var body string
 	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Host != "localhost" {
+		if r.Host != "localhost" || r.Header.Get("X-Forwarded-Proto") != "https" {
 			http.Error(w, `{"error": "Trusted domain error.", "code": 15}`, http.StatusBadRequest) // as Nextcloud
 			return
 		}
@@ -248,6 +248,43 @@ func TestSetupChecks(t *testing.T) {
 		{"rsshub", "GET /healthz", 403, `Authentication failed. Access denied.`, true},
 		{"rsshub", "GET /healthz", 200, `ok`, false},
 		{"rsshub", "GET /nope", 403, ``, false}, // a 404 is not a 403
+		{"jellyfin", "GET /System/Info/Public", 200, `{"Version":"10.11.11","StartupWizardCompleted":true}`, true},
+		{"jellyfin", "GET /System/Info/Public", 200, `{"StartupWizardCompleted":false}`, false},
+		{"audiobookshelf", "GET /status", 200, `{"app":"audiobookshelf","isInit":true}`, true},
+		{"audiobookshelf", "GET /status", 200, `{"app":"audiobookshelf","isInit":false}`, false},
+		{"vaultwarden", "GET /api/config", 200, `{"version":"2026.6.0","server":{"name":"Vaultwarden"}}`, true},
+		{"vaultwarden", "GET /api/config", 200, `{"version":"2026.6.0"}`, false},
+		{"forgejo", "GET /api/v1/users/search?limit=1", 200, `{"ok":true,"data":[{"id":1}]}`, true},
+		{"forgejo", "GET /api/v1/users/search?limit=1", 200, `{"ok":true,"data":[]}`, false},
+		{"seerr", "GET /api/v1/settings/public", 200, `{"initialized":true}`, true},
+		{"seerr", "GET /api/v1/settings/public", 200, `{"initialized":false}`, false},
+		{"actual", "GET /account/needs-bootstrap", 200, `{"status":"ok","data":{"bootstrapped":true}}`, true},
+		{"actual", "GET /account/needs-bootstrap", 200, `{"status":"ok","data":{"bootstrapped":false}}`, false},
+		{"actual", "GET /account/needs-bootstrap", 200, `{"status":"ok","data":"x"}`, false},
+		{"n8n", "GET /rest/settings", 200, `{"data":{"userManagement":{"showSetupOnFirstLoad":false}}}`, true},
+		{"n8n", "GET /rest/settings", 200, `{"data":{"userManagement":{"showSetupOnFirstLoad":true}}}`, false},
+		{"n8n", "GET /rest/settings", 200, `{"data":{}}`, false}, // not n8n's answer: don't read a missing flag as false
+		{"open-webui", "GET /api/config", 200, `{"status":true,"features":{"auth":true,"auth_trusted_header":false}}`, true},
+		{"open-webui", "GET /api/config", 200, `{"onboarding":true,"status":true,"features":{"auth":true}}`, false},
+		{"open-webui", "GET /api/config", 200, `{"status":true,"features":{"auth":false}}`, false},
+		{"open-webui", "GET /api/config", 200, `{"status":true,"features":{"auth":true,"auth_trusted_header":true}}`, false},
+		{"mealie", "GET /api/app/about/startup-info", 200, `{"isFirstLogin":false,"isDemo":false}`, true},
+		{"mealie", "GET /api/app/about/startup-info", 200, `{"isFirstLogin":true,"isDemo":false}`, false},
+		{"paperless", "GET /api/auth/headless/app/v1/config", 200, `{"status":200,"data":{"account":{"is_open_for_signup":false}}}`, true},
+		{"paperless", "GET /api/auth/headless/app/v1/config", 200, `{"status":200,"data":{"account":{"is_open_for_signup":true}}}`, false},
+		{"paperless", "GET /api/auth/headless/app/v1/config", 404, ``, false},
+		{"trilium", "GET /bootstrap", 200, `{"loggedIn":false,"login":{"ssoEnabled":false}}`, true},
+		{"trilium", "GET /bootstrap", 200, `{"passwordSet":false}`, false},
+		{"trilium", "GET /bootstrap", 200, `{"dbInitialized":true,"passwordSet":true,"loggedIn":true}`, false}, // noAuthentication
+		{"ghost", "GET /ghost/api/admin/authentication/setup/", 200, `{"setup":[{"status":true}]}`, true},
+		{"ghost", "GET /ghost/api/admin/authentication/setup/", 200, `{"setup":[{"status":false,"title":"x"}]}`, false},
+		{"ghost", "GET /ghost/api/admin/authentication/setup/", 200, `{"setup":[]}`, false},
+		{"kavita", "GET /api/admin/exists", 200, `true`, true},
+		{"kavita", "GET /api/admin/exists", 200, `false`, false},
+		{"komga", "GET /api/v1/claim", 200, `{"isClaimed":true}`, true},
+		{"komga", "GET /api/v1/claim", 200, `{"isClaimed":false}`, false},
+		{"navidrome", "GET /app/", 200, `<script>window.__APP_CONFIG__ = "{\"firstTime\":false,\"version\":\"x\"}"</script>`, true},
+		{"navidrome", "GET /app/", 200, `<script>window.__APP_CONFIG__ = "{\"firstTime\":true,\"version\":\"x\"}"</script>`, false},
 	} {
 		i := slices.IndexFunc(rs, func(r recipes.Recipe) bool { return r.App == tt.app })
 		if i < 0 {

@@ -1,0 +1,10 @@
+app: navidrome
+match: { images: ["deluan/navidrome", "ghcr.io/navidrome/navidrome"] }
+upstream_port: 4533
+# The page carries its config as a JSON string; firstTime is true until the
+# admin exists. Not checked: ReverseProxyWhitelist trusts a header for
+# login; don't include the Farstu client's address in it.
+setup_done: { path: /app/, contains: '\"firstTime\":false' }
+# Not covered: Subsonic clients send the password with every /rest request.
+login:
+  - { method: POST, path: /auth/login }

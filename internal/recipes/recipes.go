@@ -29,14 +29,18 @@ type Recipe struct {
 }
 
 // SetupDone: Method (default GET) Path answers Status (default 200) once
-// the app is set up. With 200, Field must also be set in its JSON object:
-// true, or a non-empty list or object.
+// the app is set up. With 200 it must also say so in its answer: Field set
+// (true, or a non-empty list or object), none of Unset set (missing, false or
+// empty), and the text Contains. Field and Unset are dotted JSON paths
+// ("data.account", "setup.0.status"; "." is the whole answer).
 type SetupDone struct {
-	Method  string `yaml:"method"`
-	Path    string `yaml:"path"`
-	Status  int    `yaml:"status"`
-	Field   string `yaml:"field"`
-	Message string `yaml:"message"` // why it can't be turned on yet; default: no admin account
+	Method   string   `yaml:"method"`
+	Path     string   `yaml:"path"`
+	Status   int      `yaml:"status"`
+	Field    string   `yaml:"field"`
+	Unset    []string `yaml:"unset"`
+	Contains string   `yaml:"contains"`
+	Message  string   `yaml:"message"` // why it can't be turned on yet; default: no admin account
 }
 
 // Login is where the app takes passwords; attempts there are rate limited
@@ -68,8 +72,8 @@ func Load(fsys fs.FS) ([]Recipe, error) {
 		if err == nil && r.NoLogin == (s.Path != "") {
 			err = errors.New("needs either setup_done.path or no_login")
 		}
-		if err == nil && s.Path != "" && (s.Status == 0 || s.Status == 200) && s.Field == "" {
-			err = errors.New("setup_done needs a field, or a status other than 200")
+		if err == nil && s.Path != "" && (s.Status == 0 || s.Status == 200) && s.Field == "" && len(s.Unset) == 0 && s.Contains == "" {
+			err = errors.New("setup_done needs a field, unset or contains, or a status other than 200")
 		}
 		for _, l := range r.Login {
 			if err == nil && (l.Path == "" || l.Method == "") {

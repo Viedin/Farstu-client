@@ -1,0 +1,7 @@
+app: forgejo
+match: { images: ["codeberg.org/forgejo/forgejo"] }
+upstream_port: 3000
+# A Gitea fork; see gitea.yaml.
+setup_done: { path: "/api/v1/users/search?limit=1", field: data }
+login:
+  - { method: POST, path: /user/login }

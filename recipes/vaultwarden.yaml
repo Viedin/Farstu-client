@@ -1,0 +1,10 @@
+app: vaultwarden
+match: { images: ["vaultwarden/server", "ghcr.io/dani-garcia/vaultwarden", "quay.io/vaultwarden/server"] }
+upstream_port: 80
+# No first-visitor admin: accounts own only their vault and /admin needs
+# ADMIN_TOKEN. This just checks Vaultwarden answers. Open sign-ups
+# (SIGNUPS_ALLOWED, on by default) are the user's call.
+setup_done: { path: /api/config, field: server }
+login:
+  - { method: POST, path: /identity/connect/token }
+  - { method: POST, path: /admin }

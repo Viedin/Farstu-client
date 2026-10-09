@@ -1,0 +1,6 @@
+app: overseerr
+match: { images: ["sctx/overseerr", "linuxserver/overseerr", "lscr.io/linuxserver/overseerr", "ghcr.io/linuxserver/overseerr"] }
+upstream_port: 5055
+setup_done: { path: /api/v1/settings/public, field: initialized } # false until the setup wizard is done
+login:
+  - { method: POST, path: /api/v1/auth/local } # Plex sign-in takes a Plex token, not a password

@@ -1,0 +1,13 @@
+app: open-webui
+match: { images: ["ghcr.io/open-webui/open-webui"] }
+upstream_port: 8080
+setup_done:
+  path: /api/config
+  field: features.auth # WEBUI_AUTH=False lets everyone in as admin
+  # onboarding is only there while there is no user; a trusted email header
+  # would let any visitor sign in as anyone.
+  unset: [onboarding, features.auth_trusted_header]
+  message: Open WebUI has no admin account yet, or lets people in without a password (WEBUI_AUTH off or WEBUI_AUTH_TRUSTED_EMAIL_HEADER set). Create the admin from your home network first, with login on
+login:
+  - { method: POST, path: /api/v1/auths/signin }
+  - { method: POST, path: /api/v1/auths/ldap }

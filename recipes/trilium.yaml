@@ -1,0 +1,15 @@
+app: trilium
+match: { images: ["ghcr.io/triliumnext/trilium", "triliumnext/trilium", "ghcr.io/triliumnext/notes", "triliumnext/notes"] }
+upstream_port: 8080
+# login (the login screen's settings) is only there once a password is set,
+# and not with noAuthentication.
+setup_done:
+  path: /bootstrap
+  field: login
+  message: Trilium has no password yet, or noAuthentication is on. Set a password from your home network first
+login:
+  - { method: POST, path: /login }
+  - { method: POST, path: /api/login/sync }
+  - { method: POST, path: /api/login/token }
+  - { method: POST, path: /api/sender/login }
+  - { method: POST, path: /etapi/auth/login }

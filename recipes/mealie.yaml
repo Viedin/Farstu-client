@@ -1,0 +1,11 @@
+app: mealie
+match: { images: ["ghcr.io/mealie-recipes/mealie", "hkotel/mealie"] }
+upstream_port: 9000
+# A new Mealie has an admin with a published default password; isFirstLogin
+# is true while a user with its default email exists.
+setup_done:
+  path: /api/app/about/startup-info
+  unset: [isFirstLogin]
+  message: Mealie still has its default admin (changeme@example.com), whose password anyone can look up. Sign in from your home network and change its email and password first
+login:
+  - { method: POST, path: /api/auth/token }

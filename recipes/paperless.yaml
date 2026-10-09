@@ -1,0 +1,18 @@
+app: paperless
+match: { images: ["ghcr.io/paperless-ngx/paperless-ngx", "paperlessngx/paperless-ngx"] }
+upstream_port: 8000
+# On a new install sign-up is open and the first to sign up becomes
+# superuser. Fails closed (stays off) while PAPERLESS_ACCOUNT_ALLOW_SIGNUPS
+# keeps it open. Not checked: PAPERLESS_AUTO_LOGIN_USERNAME and
+# PAPERLESS_ENABLE_HTTP_REMOTE_USER skip the login; don't use them with Farstu.
+setup_done:
+  path: /api/auth/headless/app/v1/config
+  field: data.account
+  unset: [data.account.is_open_for_signup]
+  message: Paperless is open for sign-ups, and on a new install the first to sign up becomes its admin. Create your account from your home network first, and keep PAPERLESS_ACCOUNT_ALLOW_SIGNUPS off
+# Not covered: the API also takes passwords with any request (basic auth).
+login:
+  - { method: POST, path: /api/token }
+  - { method: POST, path: /accounts/login }
+  - { method: POST, path: /api/auth/headless/browser/v1/auth/login }
+  - { method: POST, path: /api/auth/headless/app/v1/auth/login }
