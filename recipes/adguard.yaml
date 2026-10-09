@@ -1,0 +1,11 @@
+app: adguard
+match: { images: ["adguard/adguardhome"] }
+upstream_port: 3000 # the web port CasaOS publishes; choose it in AdGuard's setup
+# Without a user AdGuard asks for no login at all; its API answers 401 once
+# setup has made one.
+setup_done:
+  path: /control/status
+  status: 401
+  message: AdGuard Home has no login yet, so anyone who opens it could change your DNS. Finish its setup from your home network first
+login:
+  - { method: POST, path: /control/login }

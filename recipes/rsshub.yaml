@@ -1,0 +1,9 @@
+app: rsshub
+match: { images: ["diygod/rsshub", "ghcr.io/diygod/rsshub"] }
+upstream_port: 1200
+# No accounts: without ACCESS_KEY anyone can use it, and the site cookies
+# and API keys it was given. With one, every route but / answers 403.
+setup_done:
+  path: /healthz
+  status: 403
+  message: RSSHub has no ACCESS_KEY, so anyone could use it and the accounts you gave it. Set a long random ACCESS_KEY in its environment first

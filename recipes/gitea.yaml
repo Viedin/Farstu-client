@@ -1,0 +1,11 @@
+app: gitea
+match: { images: ["gitea/gitea", "docker.gitea.com/gitea"] }
+upstream_port: 3000
+# With no admin made in the installer, the first account to register becomes
+# admin: wait for a user. Fails closed (stays off) when anonymous visitors
+# can't list users (REQUIRE_SIGNIN_VIEW, hidden users page, a private admin).
+# Not checked: ENABLE_REVERSE_PROXY_AUTHENTICATION trusts a header for login;
+# don't turn that on for a Gitea reached through Farstu.
+setup_done: { path: "/api/v1/users/search?limit=1", field: data }
+login:
+  - { method: POST, path: /user/login }

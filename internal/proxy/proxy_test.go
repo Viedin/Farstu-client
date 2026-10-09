@@ -1,0 +1,285 @@
+package proxy
+
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pires/go-proxyproto"
+
+	"github.com/viedin/farstu-client/internal/recipes"
+)
+
+func echoUpstream(t *testing.T) string {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s %s [%s] %s %s", r.Header.Get("X-Forwarded-For"), r.Header.Get("X-Real-Ip"), r.Header.Get("Forwarded"), r.Header.Get("X-Forwarded-Proto"), r.Host)
+	}))
+	t.Cleanup(up.Close)
+	return up.Listener.Addr().String()
+}
+
+func TestRouter(t *testing.T) {
+	rt := NewRouter()
+	rt.Enable("immich.u.farstu.test", echoUpstream(t), nil)
+	closed, _ := net.Listen("tcp", "127.0.0.1:0")
+	closed.Close()
+	rt.Enable("down.u.farstu.test", closed.Addr().String(), nil)
+
+	get := func(host string) (int, string) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	for _, tt := range []struct {
+		host string
+		code int
+		body string
+	}{
+		{"immich.u.farstu.test", 200, "immich.u.farstu.test"},
+		{"IMMICH.u.farstu.test.:443", 200, "IMMICH.u.farstu.test.:443"},
+		{"other.u.farstu.test", 404, "No app is turned on"},
+		{"", 404, "No app is turned on"},
+		{"down.u.farstu.test", 502, "App is not running"},
+	} {
+		code, body := get(tt.host)
+		if code != tt.code || !strings.Contains(body, tt.body) {
+			t.Errorf("%q: %d %q, want %d %q", tt.host, code, body, tt.code, tt.body)
+		}
+	}
+
+	rt.Disable("immich.u.farstu.test")
+	if code, _ := get("immich.u.farstu.test"); code != 404 {
+		t.Errorf("after Disable: %d, want 404", code)
+	}
+}
+
+func TestServeProxyV2(t *testing.T) {
+	donor := httptest.NewTLSServer(nil) // borrow its self-signed cert
+	certs := donor.TLS.Certificates
+	donor.Close()
+
+	rt := NewRouter()
+	rt.Enable("immich.u.farstu.test", echoUpstream(t), nil)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error)
+	go func() { served <- Serve(ctx, ln, &tls.Config{Certificates: certs}, rt) }()
+
+	client := func(sendHeader bool) *http.Client {
+		return &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				c, err := (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+				if err != nil || !sendHeader {
+					return c, err
+				}
+				h := &proxyproto.Header{
+					Version: 2, Command: proxyproto.PROXY, TransportProtocol: proxyproto.TCPv4,
+					SourceAddr:      &net.TCPAddr{IP: net.ParseIP("203.0.113.7"), Port: 5555},
+					DestinationAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 443},
+				}
+				_, err = h.WriteTo(c)
+				return c, err
+			},
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			ForceAttemptHTTP2: true,
+		}}
+	}
+
+	req, _ := http.NewRequest("GET", "https://immich.u.farstu.test/", nil)
+	for _, h := range []string{"X-Forwarded-For", "X-Real-Ip", "Forwarded"} {
+		req.Header.Set(h, "for=1.2.3.4") // spoofed
+	}
+	resp, err := client(true).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if want := "203.0.113.7 203.0.113.7 [] https immich.u.farstu.test"; string(body) != want {
+		t.Errorf("body %q, want %q", body, want)
+	}
+	if resp.ProtoMajor != 2 {
+		t.Errorf("proto %s, want HTTP/2 via ALPN", resp.Proto)
+	}
+
+	if _, err := client(false).Get("https://immich.u.farstu.test/"); err == nil {
+		t.Error("connection without PROXY header was accepted")
+	}
+
+	// WebSocket: browsers upgrade over HTTP/1.1 (Go's h2 server has extended CONNECT off).
+	ws := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") != "websocket" {
+			http.Error(w, "want upgrade", 400)
+			return
+		}
+		w.Header().Set("Connection", "Upgrade")
+		w.Header().Set("Upgrade", "websocket")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+		c, buf, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		defer c.Close()
+		io.Copy(c, buf) // echo
+	}))
+	defer ws.Close()
+	rt.Enable("ws.u.farstu.test", ws.Listener.Addr().String(), nil)
+	tr := client(true).Transport.(*http.Transport)
+	raw, err := tr.DialContext(context.Background(), "tcp", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := tls.Client(raw, &tls.Config{InsecureSkipVerify: true, NextProtos: []string{"http/1.1"}})
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprint(conn, "GET / HTTP/1.1\r\nHost: ws.u.farstu.test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+	br := bufio.NewReader(conn)
+	wsResp, err := http.ReadResponse(br, nil)
+	if err != nil || wsResp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("upgrade: %v %v", wsResp, err)
+	}
+	fmt.Fprint(conn, "ping")
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(br, got); err != nil || string(got) != "ping" {
+		t.Errorf("websocket echo %q %v", got, err)
+	}
+
+	cancel()
+	if err := <-served; err != nil {
+		t.Errorf("Serve: %v", err)
+	}
+}
+
+// Case 3: turning an app off cuts its open streams and WebSockets within 1s.
+func TestDisableCutsOpenStreams(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") == "websocket" {
+			w.Header().Set("Connection", "Upgrade")
+			w.Header().Set("Upgrade", "websocket")
+			w.WriteHeader(http.StatusSwitchingProtocols)
+			c, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			defer c.Close()
+			io.Copy(io.Discard, c) // hold it open
+			return
+		}
+		w.Write([]byte("hi"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // stream forever
+	}))
+	defer up.Close()
+	for _, reEnable := range []bool{false, true} {
+		t.Run(fmt.Sprint("reEnable=", reEnable), func(t *testing.T) {
+			rt := NewRouter()
+			rt.Enable("a.u.farstu.test", up.Listener.Addr().String(), nil)
+			edge := httptest.NewServer(rt)
+			defer edge.Close()
+
+			req, _ := http.NewRequest("GET", edge.URL, nil)
+			req.Host = "a.u.farstu.test"
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if _, err := io.ReadFull(resp.Body, make([]byte, 2)); err != nil {
+				t.Fatal(err)
+			}
+
+			ws, err := net.Dial("tcp", edge.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ws.Close()
+			fmt.Fprint(ws, "GET / HTTP/1.1\r\nHost: a.u.farstu.test\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+			br := bufio.NewReader(ws)
+			if r, err := http.ReadResponse(br, nil); err != nil || r.StatusCode != http.StatusSwitchingProtocols {
+				t.Fatalf("upgrade: %v %v", r, err)
+			}
+
+			streamDone := make(chan error, 1)
+			go func() { _, err := io.Copy(io.Discard, resp.Body); streamDone <- err }()
+
+			if reEnable { // streams opened before a re-enable must not outlive Disable
+				rt.Enable("a.u.farstu.test", up.Listener.Addr().String(), nil)
+			}
+			rt.Disable("a.u.farstu.test")
+			timeout := time.After(time.Second)
+
+			ws.SetDeadline(time.Now().Add(time.Second))
+			if _, err := br.ReadByte(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("WebSocket still open after Disable: %v", err)
+			}
+			select {
+			case err := <-streamDone:
+				if err == nil {
+					t.Error("stream ended cleanly, want it cut")
+				}
+			case <-timeout:
+				t.Error("stream still open after Disable")
+			}
+		})
+	}
+}
+
+// Guardrail: password guessing at the recipe's login paths is cut off per
+// visitor; the rest of the app and other visitors are unaffected.
+func TestLoginLimit(t *testing.T) {
+	rt := NewRouter()
+	rt.Enable("immich.u.farstu.test", echoUpstream(t), []recipes.Login{{Path: "/api/auth/login", Method: "POST"}, {Path: "/rpc/SignIn", Method: "POST"}})
+	do := func(remote, method, path string) int {
+		req := httptest.NewRequest(method, path, nil)
+		req.Host = "immich.u.farstu.test"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	for i := range loginBurst {
+		if code := do("203.0.113.7:1000", "POST", "/api/auth/login"); code != 200 {
+			t.Fatalf("attempt %d: %d", i+1, code)
+		}
+	}
+	for _, p := range []string{"/api/auth/login", "/API/auth/login/", "//api/./auth/login", "/rpc/SignIn"} { // one budget for all of them
+		if code := do("203.0.113.7:2000", "post", p); code != http.StatusTooManyRequests {
+			t.Errorf("over the limit at %s: %d", p, code)
+		}
+	}
+	if code := do("203.0.113.7:1000", "GET", "/api/assets"); code != 200 {
+		t.Errorf("rest of the app blocked: %d", code)
+	}
+	if code := do("203.0.113.8:1000", "POST", "/api/auth/login"); code != 200 {
+		t.Errorf("another visitor blocked: %d", code)
+	}
+
+	// IPv6: one /64 is one visitor.
+	for range loginBurst {
+		do("[2001:db8:1:2::1]:1", "POST", "/api/auth/login")
+	}
+	if code := do("[2001:db8:1:2::99]:1", "POST", "/api/auth/login"); code != http.StatusTooManyRequests {
+		t.Errorf("same /64: %d", code)
+	}
+	if code := do("[2001:db8:1:3::1]:1", "POST", "/api/auth/login"); code != 200 {
+		t.Errorf("other /64: %d", code)
+	}
+}

@@ -1,0 +1,4 @@
+app: nextcloud
+match: { images: ["nextcloud"] } # the apache variants; fpm ones don't speak HTTP
+upstream_port: 80
+setup_done: { path: /status.php, field: installed } # false while the install wizard is open

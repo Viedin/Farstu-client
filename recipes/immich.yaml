@@ -1,0 +1,6 @@
+app: immich
+match: { images: ["ghcr.io/immich-app/immich-server"] }
+upstream_port: 2283
+setup_done: { path: /api/server/config, field: isInitialized } # true once the admin account exists
+login:
+  - { method: POST, path: /api/auth/login }

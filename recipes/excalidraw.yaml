@@ -1,0 +1,4 @@
+app: excalidraw
+match: { images: ["excalidraw/excalidraw"] }
+upstream_port: 80
+no_login: true # static page; drawings stay in each visitor's browser

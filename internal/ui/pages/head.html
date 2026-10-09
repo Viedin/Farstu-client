@@ -1,0 +1,35 @@
+{{define "head"}}<!doctype html>{{if .}}
+<meta http-equiv="refresh" content="3">{{end}}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Farstu</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--text:#1d2129;--muted:#667085;--line:#e3e6eb;--accent:#2563eb;--ok:#16a34a;--bad:#dc2626}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--text:#e6e8eb;--muted:#9aa3af;--line:#2c313a;--accent:#5b93ff;--ok:#22c55e;--bad:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:560px;margin:0 auto;padding:32px 16px}
+h1{font-size:24px;margin:0}
+p{margin:8px 0}
+a{color:var(--accent)}
+.muted{color:var(--muted)}
+.card{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:12px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.name{font-weight:600;text-transform:capitalize}
+.host{font-size:14px;word-break:break-all}
+.status{font-size:14px;color:var(--muted);margin-top:8px}
+.status:empty{display:none}
+.ok{color:var(--ok)}
+.bad{color:var(--bad)}
+.error{border-color:var(--bad);color:var(--bad)}
+.switch{flex:none;position:relative;width:48px;height:28px;padding:0;border:0;border-radius:14px;background:var(--line);cursor:pointer}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0004}
+.switch[aria-checked=true]{background:var(--ok)}
+.switch[aria-checked=true]::after{left:23px}
+.switch:focus-visible,.button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.button{display:inline-block;margin:8px 0;padding:10px 20px;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;text-decoration:none}
+.code{font:600 20px ui-monospace,Menlo,monospace;letter-spacing:2px}
+</style>
+<main>
+<h1>Farstu</h1>
+{{end}}

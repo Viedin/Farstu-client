@@ -1,0 +1,7 @@
+app: docmost
+match: { images: ["docmost/docmost"] }
+upstream_port: 3000
+# Setup creates the workspace and its admin together; until then this is a 404.
+setup_done: { method: POST, path: /api/workspace/public, field: data }
+login:
+  - { method: POST, path: /api/auth/login }

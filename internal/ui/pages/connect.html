@@ -1,0 +1,10 @@
+{{define "connect"}}{{template "head" true}}
+<div class="card">
+{{with .VerificationURIComplete}}
+<p class="name">Connect this server</p>
+<p>Open the link, sign in or create an account, check that it shows the code below, and click Connect.</p>
+<a class="button" href="{{.}}" target="_blank" rel="noopener">Connect to Farstu</a>
+<p>Code: <span class="code">{{$.UserCode}}</span></p>
+<p class="muted">This page moves on by itself once you're connected.</p>
+{{else}}<p class="muted">Contacting Farstu…</p>{{end}}
+</div>{{end}}
