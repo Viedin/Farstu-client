@@ -59,6 +59,7 @@ type UI struct {
 	// their sign-in paths by name; nil checks are skipped.
 	Supported []string
 	Logins    map[string][]recipes.Login
+	Account   string // the account page on Farstu Server; empty hides the link
 	Tunnel    func(context.Context) error
 	Probe     func(ctx context.Context, host string) (api.ProbeResponse, error)
 }
@@ -278,9 +279,9 @@ func (u *UI) mux() http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
 		pages.ExecuteTemplate(w, "apps", struct {
-			Apps                      []row
-			Problem, Error, Supported string
-		}{rows, problem, errMsg, strings.Join(u.Supported, ", ")})
+			Apps                               []row
+			Problem, Error, Supported, Account string
+		}{rows, problem, errMsg, strings.Join(u.Supported, ", "), u.Account})
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusOK, "")
@@ -395,6 +396,8 @@ func localHost(host string) bool {
 // Page is the local web page: how to connect this server while it
 // registers, then the app toggles.
 type Page struct {
+	Disconnected bool // set before serving: the previous device was disconnected from its account
+
 	mu   sync.Mutex
 	code api.DeviceCodeResponse
 	ui   http.Handler
@@ -423,7 +426,10 @@ func (p *Page) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	pages.ExecuteTemplate(w, "connect", code)
+	pages.ExecuteTemplate(w, "connect", struct {
+		api.DeviceCodeResponse
+		Disconnected bool
+	}{code, p.Disconnected})
 }
 
 // Serve serves the page on ln until ctx is done.

@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,5 +62,23 @@ func TestRegisterRetries(t *testing.T) {
 		if _, err := Register(context.Background(), "http://unused.invalid", path, nil); err == nil {
 			t.Fatalf("device file %s accepted", bad)
 		}
+	}
+}
+
+// Only a 401 means the device is gone; a server having trouble must not make
+// the client forget it.
+func TestMeUnknownDevice(t *testing.T) {
+	status := http.StatusUnauthorized
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(status) }))
+	defer srv.Close()
+	if _, err := Me(context.Background(), srv.URL, "tok"); !errors.Is(err, ErrUnknownDevice) {
+		t.Fatalf("401: %v", err)
+	}
+	status = http.StatusBadGateway
+	if _, err := Me(context.Background(), srv.URL, "tok"); err == nil || errors.Is(err, ErrUnknownDevice) {
+		t.Fatalf("502: %v", err)
+	}
+	if _, err := Me(context.Background(), "http://127.0.0.1:1", "tok"); err == nil || errors.Is(err, ErrUnknownDevice) {
+		t.Fatalf("unreachable: %v", err)
 	}
 }

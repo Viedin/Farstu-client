@@ -52,6 +52,9 @@ visitor ──TLS──▶ relay (stock frps, routes on SNI, never decrypts)
   address and the relay's certificate, saved in `/data/device.json` (0600).
   The token only travels over verified TLS: system roots for the API, the
   pinned relay cert for frpc.
+  If the server answers 401 (disconnected on the account page, replaced by
+  another server, account deleted), the client forgets the device and which
+  apps were on, and the local page asks to connect again.
 - **Discovery** runs over the Docker socket (Engine API, following container
   start/die events), matching `recipes/*.yaml` against image names.
 - **Tunnel:** a pinned [frp](https://github.com/fatedier/frp) `frpc` runs as

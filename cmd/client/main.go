@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -47,13 +48,32 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, *server, *dataDir, *frpcBin, *ca, *uiAddr, *dockerSock); err != nil {
-		slog.Error("farstu client stopped", "err", err)
-		os.Exit(1)
+	disconnected := false
+	for {
+		err := run(ctx, *server, *dataDir, *frpcBin, *ca, *uiAddr, *dockerSock, disconnected)
+		if !errors.Is(err, control.ErrUnknownDevice) || ctx.Err() != nil {
+			if err != nil {
+				slog.Error("farstu client stopped", "err", err)
+				os.Exit(1)
+			}
+			return
+		}
+		// Forget the device and which apps were on: whoever connects this
+		// server next starts with every app off.
+		slog.Warn("this server was disconnected from its Farstu account; connect it again on the local page")
+		for _, f := range []string{"device.json", "apps.json"} {
+			if err := os.Remove(filepath.Join(*dataDir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				slog.Error("farstu client stopped", "err", err)
+				os.Exit(1)
+			}
+		}
+		disconnected = true
 	}
 }
 
-func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock string) (err error) {
+// run serves until ctx is done or something fails. disconnected tells the
+// local page the previous device was disconnected from its account.
+func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock string, disconnected bool) (err error) {
 	if server == "" {
 		return errors.New("-server is required")
 	}
@@ -77,7 +97,7 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	}()
 
 	// Up before registering: the page shows the link to connect this server.
-	var page ui.Page
+	page := ui.Page{Disconnected: disconnected}
 	spawn(func() error { return page.Serve(ctx, uiLn) })
 	slog.Info("local page", "addr", uiAddr)
 	dev, err := control.Register(ctx, server, filepath.Join(dataDir, "device.json"), page.ShowCode)
@@ -92,6 +112,7 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	router := proxy.NewRouter()
 	toggles := ui.Load(filepath.Join(dataDir, "apps.json"), router, dev.Subdomain+"."+dev.Domain)
 	toggles.Logins = map[string][]recipes.Login{}
+	toggles.Account = server + "/account"
 	for _, r := range rs {
 		toggles.Supported = append(toggles.Supported, r.App)
 		toggles.Logins[r.App] = r.Login
@@ -135,7 +156,7 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	spawn(func() error { return proxy.Serve(ctx, ln, tlsConf, router) })
 	restartFrpc := make(chan struct{}, 1)
 	spawn(func() error { return frpc.Run(ctx, frpcConf, restartFrpc) })
-	spawn(func() error { watchPlan(ctx, server, dev.Token, toggles, restartFrpc); return nil })
+	spawn(func() error { return watchPlan(ctx, server, dev.Token, toggles, restartFrpc) })
 	spawn(func() error { discover.Watch(ctx, dockerSock, rs, toggles.SetApps); return nil })
 	slog.Info("farstu client started", "address", "*."+dev.Subdomain+"."+dev.Domain)
 	<-ctx.Done()
@@ -145,11 +166,14 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 // watchPlan keeps the app limit in step with the account's plan, and
 // reconnects the tunnel when the plan changes so the relay applies its speed
 // limit. Until the first answer there is no app limit; the relay caps a free
-// plan's speed regardless.
-func watchPlan(ctx context.Context, server, token string, toggles *ui.UI, restartFrpc chan<- struct{}) {
+// plan's speed regardless. Returns control.ErrUnknownDevice once the server
+// no longer knows this device.
+func watchPlan(ctx context.Context, server, token string, toggles *ui.UI, restartFrpc chan<- struct{}) error {
 	last := ""
 	for {
-		if me, err := control.Me(ctx, server, token); err != nil {
+		if me, err := control.Me(ctx, server, token); errors.Is(err, control.ErrUnknownDevice) {
+			return err
+		} else if err != nil {
 			slog.Warn("could not check the plan", "err", err)
 		} else {
 			toggles.SetAppLimit(me.AppLimit)
@@ -164,7 +188,7 @@ func watchPlan(ctx context.Context, server, token string, toggles *ui.UI, restar
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-time.After(time.Minute):
 		}
 	}

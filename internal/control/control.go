@@ -20,6 +20,11 @@ import (
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
+// ErrUnknownDevice means Farstu Server no longer knows this device: it was
+// disconnected on the account page, replaced by another server, or its
+// account was deleted. Only registering again helps.
+var ErrUnknownDevice = errors.New("this server was disconnected from its Farstu account")
+
 // Device is what the client keeps after registering.
 type Device = api.DeviceTokenResponse
 
@@ -137,6 +142,9 @@ func Me(ctx context.Context, serverURL, token string) (api.Me, error) {
 	status, body, err := do(ctx, http.MethodGet, serverURL+"/v1/me", token, nil)
 	if err != nil {
 		return m, fmt.Errorf("Farstu Server unreachable: %w", err)
+	}
+	if status == http.StatusUnauthorized {
+		return m, ErrUnknownDevice
 	}
 	if status != http.StatusOK {
 		return m, fmt.Errorf("Farstu Server refused the plan check (HTTP %d)", status)

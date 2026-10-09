@@ -268,6 +268,13 @@ func TestPage(t *testing.T) {
 	if _, body := get("localhost:7080", "/"); !strings.Contains(body, "Contacting Farstu") {
 		t.Errorf("before a code: %s", body)
 	}
+	if _, body := get("localhost:7080", "/"); strings.Contains(body, "disconnected") {
+		t.Errorf("disconnected on first run: %s", body)
+	}
+	p.Disconnected = true
+	if _, body := get("localhost:7080", "/"); !strings.Contains(body, "This server was disconnected from its Farstu account") {
+		t.Errorf("after a disconnect: %s", body)
+	}
 	p.ShowCode(api.DeviceCodeResponse{UserCode: "ABCD-EFGH", VerificationURIComplete: "https://api.farstu.test/device?code=ABCD-EFGH"})
 	if _, body := get("localhost:7080", "/"); !strings.Contains(body, `href="https://api.farstu.test/device?code=ABCD-EFGH"`) || !strings.Contains(body, "ABCD-EFGH</span>") {
 		t.Errorf("connect page: %s", body)
@@ -291,9 +298,10 @@ func TestPage(t *testing.T) {
 	defer up.Close()
 	u := Load(filepath.Join(t.TempDir(), "apps.json"), proxy.NewRouter(), "u.farstu.test")
 	u.SetApps(map[string]discover.App{"immich": {Upstream: up.Listener.Addr().String()}}, nil)
+	u.Account = "https://api.farstu.test/account"
 	u.Probe = func(context.Context, string) (api.ProbeResponse, error) { return api.ProbeResponse{LatencyMS: 7}, nil }
 	p.Ready(u)
-	if _, body := get("localhost:7080", "/"); !strings.Contains(body, `aria-label="immich"`) {
+	if _, body := get("localhost:7080", "/"); !strings.Contains(body, `aria-label="immich"`) || !strings.Contains(body, `href="https://api.farstu.test/account"`) {
 		t.Errorf("toggles: %s", body)
 	}
 	if _, body := get("localhost:7080", "/apps/immich/status"); body != `{"text":"","ok":false}`+"\n" {

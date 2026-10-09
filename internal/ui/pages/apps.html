@@ -17,6 +17,7 @@
 </form>
 {{else}}{{if not .Problem}}<p class="card">No supported apps are running.{{with .Supported}} Farstu works with {{.}}.{{end}}</p>{{end}}
 {{end}}
+{{with .Account}}<p class="muted"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
 <script>
 for (const el of document.querySelectorAll("[data-app]")) {
   fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
