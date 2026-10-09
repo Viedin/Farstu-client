@@ -136,17 +136,22 @@ func setupProblem(ctx context.Context, upstream string, r recipes.Recipe) string
 		return name + " is not answering yet"
 	}
 	defer resp.Body.Close()
+	// The app answers, but not as the recipe expects: often a fresh install
+	// (Docmost answers 404 until its admin exists).
+	unsure := func(why string) string {
+		return "Can't check whether " + name + " is set up (" + why + "). If it has no admin account yet, create it from your home network first"
+	}
 	switch want := cmp.Or(s.Status, http.StatusOK); {
 	case resp.StatusCode == want && s.Field == "":
 		return ""
 	case want != http.StatusOK && resp.StatusCode != want:
 		return notDone // e.g. answers without asking for a login
 	case resp.StatusCode != want:
-		return fmt.Sprintf("Can't check whether %s is set up (HTTP %d)", name, resp.StatusCode)
+		return unsure(fmt.Sprintf("HTTP %d", resp.StatusCode))
 	}
 	var v map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&v); err != nil {
-		return "Can't check whether " + name + " is set up: unexpected answer"
+		return unsure("unexpected answer")
 	}
 	if !set(v[s.Field]) {
 		return notDone

@@ -173,8 +173,8 @@ func TestSetupProblem(t *testing.T) {
 		{200, `{"isInitialized":false}`, "", "Immich has no admin account yet"},
 		{200, `{}`, "", "Immich has no admin account yet"},
 		{200, `{"isInitialized":"true"}`, "", "Immich has no admin account yet"},
-		{200, `<html>`, "", "Can't check whether Immich is set up: unexpected answer"},
-		{500, `{"isInitialized":true}`, "", "Can't check whether Immich is set up (HTTP 500)"},
+		{200, `<html>`, "", "Can't check whether Immich is set up (unexpected answer)"},
+		{500, `{"isInitialized":true}`, "", "Can't check whether Immich is set up (HTTP 500). If it has no admin account yet, create it from your home network first"},
 		{302, ``, "", "Can't check whether Immich is set up (HTTP 302)"},
 		{200, `{"isInitialized":true}`, closed.Addr().String(), "Immich is not answering yet"},
 	} {
