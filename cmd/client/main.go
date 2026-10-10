@@ -34,7 +34,7 @@ import (
 const listenPort = 8443
 
 func main() {
-	server := flag.String("server", "https://api.farstu.bytenode.se:8443", "Farstu Server URL")
+	server := flag.String("server", "https://api.farstu.app:8443", "Farstu Server URL")
 	dataDir := flag.String("data", "/data", "state directory: device, certs, frpc config")
 	frpcBin := flag.String("frpc", "/frpc", "frpc binary")
 	ca := flag.String("ca", certmagic.LetsEncryptProductionCA, "ACME directory URL")
