@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -88,15 +89,29 @@ func TestRunRestart(t *testing.T) {
 		}
 	}
 
+	host := "a.u.farstu.test"
+	var mu sync.Mutex
+	hosts := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return []string{host}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	restart := make(chan struct{})
 	done := make(chan error)
 	go func() {
-		done <- Run(ctx, Config{Bin: bin, ConfigPath: filepath.Join(dir, "frpc.toml"), RelayAddr: "relay.test:7000", RelayCert: "PEM"}, restart)
+		done <- Run(ctx, Config{Bin: bin, ConfigPath: filepath.Join(dir, "frpc.toml"), RelayAddr: "relay.test:7000", RelayCert: "PEM", Hosts: hosts}, restart)
 	}()
 	waitFor(1)
+	mu.Lock()
+	host = "b.u.farstu.test"
+	mu.Unlock()
 	restart <- struct{}{}
 	waitFor(2)
+	// The restart serves the hosts of now.
+	if b, _ := os.ReadFile(filepath.Join(dir, "frpc.toml")); !strings.Contains(string(b), `customDomains = ["b.u.farstu.test"]`) {
+		t.Fatalf("config after restart:\n%s", b)
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -130,5 +145,29 @@ func TestRunDropsRoot(t *testing.T) {
 	<-done
 	if string(uid) != strconv.Itoa(frpcUID)+"\n" {
 		t.Fatalf("frpc ran as uid %q, want %d", uid, frpcUID)
+	}
+}
+
+// The proxy's shape follows the plan: the whole zone, the apps that are on,
+// or nothing at all.
+func TestRenderHosts(t *testing.T) {
+	c := Config{ConfigPath: "/data/frpc.toml", RelayAddr: "relay.test:7000", RelayCert: "PEM", Subdomain: "u", Domain: "farstu.test", LocalPort: 8443}
+	for _, tt := range []struct {
+		hosts      func() []string
+		want, lack string
+	}{
+		{nil, "name = \"all\"\ntype = \"https\"\ncustomDomains = [\"*.u.farstu.test\"]\n", ""},
+		{func() []string { return nil }, `customDomains = ["*.u.farstu.test"]`, ""},
+		{func() []string { return []string{"a.u.farstu.test", "b.u.farstu.test"} }, "name = \"apps\"\ntype = \"https\"\ncustomDomains = [\"a.u.farstu.test\",\"b.u.farstu.test\"]\n", "*"},
+		{func() []string { return []string{} }, "", "[[proxies]]"},
+	} {
+		c.Hosts = tt.hosts
+		conf, err := Render(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(conf, tt.want) || tt.lack != "" && strings.Contains(conf, tt.lack) {
+			t.Errorf("want %q, without %q:\n%s", tt.want, tt.lack, conf)
+		}
 	}
 }

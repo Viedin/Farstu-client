@@ -15,10 +15,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
-)
 
-// proxyName is our one proxy in frpc's config and status.
-const proxyName = "farstu"
+	"github.com/viedin/farstu-client/api"
+)
 
 type Config struct {
 	Bin        string // frpc binary
@@ -29,6 +28,9 @@ type Config struct {
 	Domain     string
 	Token      string
 	LocalPort  int // the client's PROXY v2 + TLS listener on 127.0.0.1
+	// Hosts the proxy serves, read on every (re)start: nil for the whole
+	// zone (api.ProxyAll), else these (api.ProxyApps). A nil func is nil.
+	Hosts func() []string
 
 	// frpc's admin API on 127.0.0.1, used for tunnel status. Its password is
 	// random per run: the API can also rewrite frpc's config.
@@ -40,8 +42,8 @@ type Config struct {
 func certPath(c Config) string { return filepath.Join(filepath.Dir(c.ConfigPath), "relay.pem") }
 
 // Render returns frpc's TOML config: TLS to the relay verified against its
-// pinned cert, one https proxy for the device's wildcard, forwarded with
-// PROXY v2 to the local TLS listener, and the admin API on loopback.
+// pinned cert, one https proxy for c.Hosts (none for no hosts), forwarded
+// with PROXY v2 to the local TLS listener, and the admin API on loopback.
 func Render(c Config) (string, error) {
 	host, port, err := net.SplitHostPort(c.RelayAddr)
 	if err != nil {
@@ -51,6 +53,27 @@ func Render(c Config) (string, error) {
 	// token to anyone in between.
 	if c.RelayCert == "" {
 		return "", errors.New("no relay certificate")
+	}
+	var hosts []string
+	if c.Hosts != nil {
+		hosts = c.Hosts()
+	}
+	name := api.ProxyApps
+	if hosts == nil {
+		name, hosts = api.ProxyAll, []string{"*." + c.Subdomain + "." + c.Domain}
+	}
+	proxy := ""
+	if len(hosts) > 0 {
+		domains, _ := json.Marshal(hosts) // a JSON array of ASCII strings is valid TOML
+		proxy = fmt.Sprintf(`
+[[proxies]]
+name = %q
+type = "https"
+customDomains = %s
+localIP = "127.0.0.1"
+localPort = %d
+transport.proxyProtocolVersion = "v2"
+`, name, domains, c.LocalPort)
 	}
 	// Values come from our server; %q is valid TOML for these plain ASCII strings.
 	return fmt.Sprintf(`serverAddr = %q
@@ -66,30 +89,31 @@ webServer.addr = "127.0.0.1"
 webServer.port = %d
 webServer.user = "farstu"
 webServer.password = %q
-
-[[proxies]]
-name = %q
-type = "https"
-customDomains = [%q]
-localIP = "127.0.0.1"
-localPort = %d
-transport.proxyProtocolVersion = "v2"
-`, host, port, certPath(c), c.Subdomain, c.Token, c.AdminPort, c.AdminPassword, proxyName, "*."+c.Subdomain+"."+c.Domain, c.LocalPort), nil
+%s`, host, port, certPath(c), c.Subdomain, c.Token, c.AdminPort, c.AdminPassword, proxy), nil
 }
 
 // Run writes the config and keeps frpc running until ctx is done, then stops
-// it with SIGTERM (SIGKILL after 5s). A receive on restart reconnects it, so
-// the relay applies a new plan's limits.
+// it with SIGTERM (SIGKILL after 5s). A receive on restart reconnects it
+// with the config rendered anew, so the relay gets the current hosts and
+// applies a new plan's limits.
+// ponytail: a restart blips the tunnel for about a second; use frpc's
+// /api/reload if free-plan toggles cutting streams turns out to matter.
 func Run(ctx context.Context, c Config, restart <-chan struct{}) error {
-	conf, err := Render(c)
-	if err != nil {
+	write := func() error {
+		conf, err := Render(c)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(c.ConfigPath, []byte(conf), 0o600); err != nil {
+			return fmt.Errorf("write frpc config: %w", err)
+		}
+		return nil
+	}
+	if err := write(); err != nil {
 		return err
 	}
 	if err := os.WriteFile(certPath(c), []byte(c.RelayCert), 0o600); err != nil {
 		return fmt.Errorf("write relay cert: %w", err)
-	}
-	if err := os.WriteFile(c.ConfigPath, []byte(conf), 0o600); err != nil {
-		return fmt.Errorf("write frpc config: %w", err)
 	}
 	cred, err := dropRoot(certPath(c), c.ConfigPath)
 	if err != nil {
@@ -97,7 +121,12 @@ func Run(ctx context.Context, c Config, restart <-chan struct{}) error {
 	}
 
 	backoff := time.Second
-	for {
+	for first := true; ; first = false {
+		if !first {
+			if err := write(); err != nil { // keeps its owner from dropRoot
+				return err
+			}
+		}
 		runCtx, stop := context.WithCancel(ctx)
 		go func() {
 			select {
@@ -194,9 +223,8 @@ func Tunnel(ctx context.Context, c Config) error {
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		return fmt.Errorf("Tunnel is down: frpc status: HTTP %d: %w", resp.StatusCode, err)
 	}
-	for _, p := range status["https"] {
+	for _, p := range status["https"] { // our one proxy, whichever name
 		switch {
-		case p.Name != proxyName:
 		case p.Status == "running":
 			return nil
 		case p.Err != "":

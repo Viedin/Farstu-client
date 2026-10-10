@@ -146,6 +146,14 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 		LocalPort:     listenPort,
 		AdminPort:     adminPort,
 		AdminPassword: rand.Text(),
+		Hosts:         toggles.Hosts,
+	}
+	restartFrpc := make(chan struct{}, 1)
+	toggles.Restart = func() {
+		select {
+		case restartFrpc <- struct{}{}:
+		default: // a restart is already pending
+		}
 	}
 	toggles.Tunnel = func(ctx context.Context) error { return frpc.Tunnel(ctx, frpcConf) }
 	toggles.Probe = func(ctx context.Context, host string) (api.ProbeResponse, error) {
@@ -154,37 +162,39 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	page.Ready(toggles)
 
 	spawn(func() error { return proxy.Serve(ctx, ln, tlsConf, router) })
-	restartFrpc := make(chan struct{}, 1)
-	spawn(func() error { return frpc.Run(ctx, frpcConf, restartFrpc) })
-	spawn(func() error { return watchPlan(ctx, server, dev.Token, toggles, restartFrpc) })
+	planKnown := make(chan struct{})
+	spawn(func() error {
+		select {
+		case <-planKnown:
+			return frpc.Run(ctx, frpcConf, restartFrpc)
+		case <-ctx.Done():
+			return nil
+		}
+	})
+	spawn(func() error { return watchPlan(ctx, server, dev.Token, toggles, planKnown) })
 	spawn(func() error { discover.Watch(ctx, dockerSock, rs, toggles.SetApps); return nil })
 	slog.Info("farstu client started", "address", "*."+dev.Subdomain+"."+dev.Domain)
 	<-ctx.Done()
 	return nil
 }
 
-// watchPlan keeps the app limit in step with the account's plan, and
-// reconnects the tunnel when the plan changes so the relay applies its speed
-// limit. Until the first answer there is no app limit; the relay caps a free
-// plan's speed regardless. Returns control.ErrUnknownDevice once the server
-// no longer knows this device.
-func watchPlan(ctx context.Context, server, token string, toggles *ui.UI, restartFrpc chan<- struct{}) error {
-	last := ""
+// watchPlan applies the account's plan to the toggles every minute, which
+// reconnect frpc when its proxy changes (ui.UI.SetPlan), and closes ready
+// after the first answer: the plan picks frpc's proxy, so frpc waits for
+// it (the relay's Login asks the server anyway). Returns
+// control.ErrUnknownDevice once the server no longer knows this device.
+func watchPlan(ctx context.Context, server, token string, toggles *ui.UI, ready chan<- struct{}) error {
 	for {
 		if me, err := control.Me(ctx, server, token); errors.Is(err, control.ErrUnknownDevice) {
 			return err
 		} else if err != nil {
 			slog.Warn("could not check the plan", "err", err)
 		} else {
-			toggles.SetAppLimit(me.AppLimit)
-			if last != "" && me.Plan != last {
-				slog.Info("plan changed, reconnecting the tunnel", "plan", me.Plan)
-				select {
-				case restartFrpc <- struct{}{}:
-				default: // a restart is already pending
-				}
+			toggles.SetPlan(me)
+			if ready != nil {
+				close(ready)
+				ready = nil
 			}
-			last = me.Plan
 		}
 		select {
 		case <-ctx.Done():

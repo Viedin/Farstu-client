@@ -283,3 +283,58 @@ func TestLoginLimit(t *testing.T) {
 		t.Errorf("other /64: %d", code)
 	}
 }
+
+// Guardrail: the local page shows password guessing always, scanning only
+// once it's more than a phone missing a few thumbnails, and forgets both
+// after a day.
+func TestIncidents(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/missing" {
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	rt := NewRouter()
+	rt.seen.now = func() time.Time { return now }
+	const app = "immich.u.farstu.test"
+	rt.Enable(app, up.Listener.Addr().String(), []recipes.Login{{Path: "/login", Method: "POST"}})
+	do := func(host, remote, method, path string, n int) {
+		for range n {
+			req := httptest.NewRequest(method, path, nil)
+			req.Host = host
+			req.RemoteAddr = remote
+			rt.ServeHTTP(httptest.NewRecorder(), req)
+		}
+	}
+	shown := func() string {
+		var s []string
+		for _, in := range rt.Incidents() {
+			s = append(s, fmt.Sprint(in.Host, " ", in.Visitor, " ", in.SignIn, " ", in.Count))
+		}
+		return strings.Join(s, ", ")
+	}
+
+	do(app, "203.0.113.7:1", "POST", "/login", loginBurst+5) // 5 blocked
+	do(app, "198.51.100.1:1", "GET", "/missing", scanMin-1)  // a phone missing thumbnails
+	do(app, "198.51.100.1:1", "GET", "/", 50)
+	now = now.Add(time.Second)
+	do(app, "198.51.100.2:1", "GET", "/missing", scanMin) // a scanner
+	now = now.Add(time.Second)
+	do("admin.u.farstu.test", "192.0.2.1:1", "GET", "/", scanMin)
+	if got, want := shown(), " 192.0.2.1 false 20, "+app+" 198.51.100.2 false 20, "+app+" 203.0.113.7 true 5"; got != want {
+		t.Errorf("incidents:\n%s, want\n%s", got, want)
+	}
+
+	// Quiet for longer than the gap: the next attempt is a new incident.
+	now = now.Add(incidentGap + time.Minute)
+	do(app, "203.0.113.7:1", "POST", "/login", 1)
+	if in := rt.Incidents(); len(in) != 4 || in[0].Count != 1 || !in[0].SignIn {
+		t.Errorf("after the gap: %+v", in)
+	}
+
+	now = now.Add(window)
+	if in := rt.Incidents(); len(in) != 0 {
+		t.Errorf("after a day: %+v", in)
+	}
+}

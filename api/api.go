@@ -2,6 +2,8 @@
 // Farstu Server; the server imports this package. Change both sides together.
 package api
 
+import "time"
+
 // POST /v1/device/code (RFC 8628 device authorization).
 type DeviceCodeResponse struct {
 	DeviceCode              string `json:"device_code"`
@@ -64,4 +66,16 @@ type ProbeResponse struct {
 type Me struct {
 	Plan     string `json:"plan"`      // "free" or "paid"
 	AppLimit int    `json:"app_limit"` // apps that may be on at once; 0 means no limit
+	// When paid time ends; zero when it doesn't, or on the free plan.
+	PaidUntil time.Time `json:"paid_until,omitzero"`
 }
+
+// The device's one frps proxy, by plan. The relay only accepts these
+// (frpc prefixes the name with "<subdomain>."):
+//   - ProxyAll: customDomains ["*.<subdomain>.<domain>"]; paid plan only.
+//   - ProxyApps: customDomains are the hosts of the apps that are on, at most
+//     Me.AppLimit; speed capped.
+const (
+	ProxyAll  = "all"
+	ProxyApps = "apps"
+)

@@ -29,6 +29,7 @@ type Router struct {
 	mu     sync.RWMutex
 	routes map[string]*route
 	logins logins
+	seen   incidents
 }
 
 type route struct {
@@ -41,8 +42,11 @@ type route struct {
 const offMsg = "No app is turned on at this address"
 
 func NewRouter() *Router {
-	return &Router{routes: map[string]*route{}, logins: logins{by: map[string]*rate.Limiter{}}}
+	return &Router{routes: map[string]*route{}, logins: logins{by: map[string]*rate.Limiter{}}, seen: incidents{now: time.Now}}
 }
+
+// Incidents returns the last day's blocked sign-ins and scans, newest first.
+func (rt *Router) Incidents() []Incident { return rt.seen.shown() }
 
 // Enable routes host to the plain-HTTP upstream address (e.g. "127.0.0.1:2283").
 // Sign-in attempts at logins are rate limited per visitor.
@@ -57,6 +61,12 @@ func (rt *Router) Enable(host, upstream string, logins []recipes.Login) {
 			// X-Real-Ip; the visitor's own would let them pose as anyone.
 			pr.SetXForwarded()
 			pr.Out.Header.Set("X-Real-Ip", pr.Out.Header.Get("X-Forwarded-For"))
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			if resp.StatusCode == http.StatusNotFound {
+				rt.seen.flag(normalize(host), visitor(resp.Request.RemoteAddr), false)
+			}
+			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if context.Cause(r.Context()) == errTurnedOff {
@@ -99,10 +109,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rr := rt.routes[normalize(r.Host)]
 	rt.mu.RUnlock()
 	if rr == nil {
+		rt.seen.flag("", visitor(r.RemoteAddr), false)
 		http.Error(w, offMsg, http.StatusNotFound)
 		return
 	}
 	if isLogin(r, rr.logins) && !rt.logins.allow(r.RemoteAddr) {
+		rt.seen.flag(normalize(r.Host), visitor(r.RemoteAddr), true)
 		http.Error(w, "Too many sign-in attempts from your network. Wait a minute and try again", http.StatusTooManyRequests)
 		return
 	}

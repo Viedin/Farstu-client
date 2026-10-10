@@ -62,7 +62,9 @@ visitor ──TLS──▶ relay (stock frps, routes on SNI, never decrypts)
   containers with a TCP port are listed as unsupported, named after the
   container, at that port (80 if several, else none is guessed).
 - **Tunnel:** a pinned [frp](https://github.com/fatedier/frp) `frpc` runs as
-  a subprocess with one `https` proxy for `*.<user>.<ourdomain>` and PROXY v2.
+  a subprocess with one `https` proxy and PROXY v2: for `*.<user>.<ourdomain>`
+  on a paid plan, for the hosts of the apps that are on on the free plan (the
+  relay enforces the free plan's app limit through it).
 - **TLS:** one wildcard certificate per user from Let's Encrypt via DNS-01
   ([certmagic](https://github.com/caddyserver/certmagic)); the server only
   writes the TXT record. The private key stays on your server. One wildcard

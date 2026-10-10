@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"maps"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -49,11 +50,12 @@ type UI struct {
 	now    func() time.Time
 
 	mu        sync.Mutex
-	on        map[string]bool
-	apps      []App // running now, by name
+	on        []string // names of apps that are on, in the order they were turned on
+	apps      []App    // running now, by name
 	problem   string
 	goneSince map[string]time.Time // apps that are on but not running
-	appLimit  int                  // apps that may be on at once, 0 = no limit; from the plan
+	plan      api.Me               // zero until the server first answers: no app limit
+	notice    string               // apps the plan turned off
 	// ponytail: goneSince lives in memory, so a client restart restarts the
 	// clock; persist it if restarts during an uninstall turn out to matter.
 
@@ -64,12 +66,15 @@ type UI struct {
 	Account   string // the account page on Farstu Server; empty hides the link
 	Tunnel    func(context.Context) error
 	Probe     func(ctx context.Context, host string) (api.ProbeResponse, error)
+	// Restart reconnects frpc when Hosts changes. It must not block: it is
+	// called with u's lock held.
+	Restart func()
 }
 
 // Load reads which apps are on from path. They are routed once SetApps
 // reports them running. Missing or corrupt state means everything is off.
 func Load(path string, router *proxy.Router, zone string) *UI {
-	u := &UI{path: path, router: router, zone: zone, now: time.Now, on: map[string]bool{}, goneSince: map[string]time.Time{}}
+	u := &UI{path: path, router: router, zone: zone, now: time.Now, goneSince: map[string]time.Time{}}
 	var names []string
 	b, err := os.ReadFile(path)
 	if err == nil {
@@ -80,9 +85,26 @@ func Load(path string, router *proxy.Router, zone string) *UI {
 		names = nil
 	}
 	for _, n := range names {
-		u.on[n] = true
+		if !u.isOn(n) {
+			u.on = append(u.on, n)
+		}
 	}
 	return u
+}
+
+func (u *UI) isOn(name string) bool { return slices.Contains(u.on, name) }
+
+func (u *UI) turnOff(name string) {
+	u.router.Disable(name + "." + u.zone)
+	u.on = slices.DeleteFunc(u.on, func(n string) bool { return n == name })
+	delete(u.goneSince, name)
+}
+
+// restart reconnects frpc if its proxy lists the apps that are on.
+func (u *UI) restart() {
+	if u.plan.AppLimit > 0 && u.Restart != nil {
+		u.Restart()
+	}
 }
 
 // SetApps takes the apps running now, or why they can't be listed. An app
@@ -102,15 +124,13 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 		apps = append(apps, App{Name: n, Host: n + "." + u.zone, Upstream: r.Upstream, Problem: r.Problem, Unsupported: r.Unsupported})
 	}
 	now, forgot := u.now(), false
-	for n := range u.on {
+	for _, n := range slices.Clone(u.on) {
 		a, ok := find(apps, n)
 		since, gone := u.goneSince[n]
 		switch {
 		case gone && now.Sub(since) >= forgetAfter:
 			slog.Info("app gone for a day, turning it off", "app", n)
-			u.router.Disable(n + "." + u.zone)
-			delete(u.on, n)
-			delete(u.goneSince, n)
+			u.turnOff(n)
 			forgot = true
 			continue
 		case !ok && !gone:
@@ -131,6 +151,7 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 		if err := u.save(); err != nil {
 			slog.Error("could not save apps turned off after a day gone; they are off until a restart", "err", err)
 		}
+		u.restart()
 	}
 }
 
@@ -139,13 +160,12 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 func (u *UI) Set(name string, on bool) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.on[name] == on {
+	if u.isOn(name) == on {
 		return nil // a second "Turn on" must not cut open streams
 	}
 	if !on {
-		u.router.Disable(name + "." + u.zone)
-		delete(u.on, name)
-		delete(u.goneSince, name)
+		u.turnOff(name)
+		u.restart()
 		if err := u.save(); err != nil {
 			return fmt.Errorf("%s is off now, but could not save it and would turn back on after a restart: %w", name, err)
 		}
@@ -158,24 +178,77 @@ func (u *UI) Set(name string, on bool) error {
 	if a.Problem != "" {
 		return refusal(a.Problem)
 	}
-	// ponytail: a downgrade leaves extra apps on; only new ones are refused.
-	if u.appLimit > 0 && len(u.on) >= u.appLimit {
-		return refusal(fmt.Sprintf("The free plan allows %d apps at once. Turn one off first, or upgrade to turn on more", u.appLimit))
+	// The relay enforces this too; refusing here says why.
+	if limit := u.plan.AppLimit; limit > 0 && len(u.on) >= limit {
+		return refusal(fmt.Sprintf("The free plan allows %d apps at once. Turn one off first, or upgrade to turn on more", limit))
 	}
-	u.on[name] = true
+	u.on = append(u.on, name)
 	if err := u.save(); err != nil {
-		delete(u.on, name)
+		u.on = u.on[:len(u.on)-1]
 		return fmt.Errorf("could not save, %s stays off: %w", name, err)
 	}
 	u.router.Enable(a.Host, a.Upstream, u.Logins[name])
+	u.notice = ""
+	u.restart()
 	return nil
 }
 
-// SetAppLimit sets how many apps may be on at once; 0 means no limit.
-func (u *UI) SetAppLimit(n int) {
+// SetPlan applies the account's plan. Under a lower app limit the apps
+// turned on last go off: the relay refuses a proxy with more.
+func (u *UI) SetPlan(me api.Me) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.appLimit = n
+	first, shape := u.plan.Plan == "", (u.plan.AppLimit == 0) != (me.AppLimit == 0)
+	u.plan = me
+	if limit := me.AppLimit; limit > 0 && len(u.on) > limit {
+		off := slices.Clone(u.on[limit:])
+		for _, n := range off {
+			u.turnOff(n)
+		}
+		slog.Info("over the plan's app limit, turned apps off", "apps", off, "limit", limit)
+		u.notice = fmt.Sprintf("The free plan allows %d apps at once, so %s turned off. Upgrade to turn on more.", limit, strings.Join(off, " and "))
+		if err := u.save(); err != nil {
+			slog.Error("could not save apps turned off by the plan; the plan turns them off again after a restart", "err", err)
+		}
+	} else if !shape {
+		return
+	}
+	// The first answer comes before frpc starts (see Hosts).
+	if !first && u.Restart != nil {
+		u.Restart() // also from free to paid: a new proxy, without the speed cap
+	}
+}
+
+// Hosts are what frpc's proxy serves: nil for the whole zone (no app limit,
+// api.ProxyAll), else the hosts of the apps that are on (api.ProxyApps).
+func (u *UI) Hosts() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.plan.AppLimit == 0 {
+		return nil
+	}
+	hosts := []string{}
+	for _, n := range u.on {
+		hosts = append(hosts, n+"."+u.zone)
+	}
+	return hosts
+}
+
+// planLine sums up the plan for the page; empty until the server answers.
+func (u *UI) planLine() string {
+	switch p := u.plan; {
+	case p.Plan == "":
+		return ""
+	case p.AppLimit > 0:
+		return fmt.Sprintf("Free plan: %d apps on at once, speed capped.", p.AppLimit)
+	case p.PaidUntil.IsZero():
+		return "Paid plan."
+	}
+	days := int(math.Ceil(u.plan.PaidUntil.Sub(u.now()).Hours() / 24)) // 1 on the last day
+	if days == 1 {
+		return "Paid plan: 1 day left."
+	}
+	return fmt.Sprintf("Paid plan: %d days left.", max(days, 0))
 }
 
 // refusal is a toggle that can't be done in this state, as opposed to a
@@ -194,14 +267,9 @@ func find(apps []App, name string) (App, bool) {
 
 // save writes u.on atomically and durably: a half-written file would mean
 // everything is off, and an off that is lost on power failure would turn
-// the app back on.
+// the app back on. The order is kept: a lower app limit keeps the first.
 func (u *UI) save() error {
-	names := []string{}
-	for n := range u.on {
-		names = append(names, n)
-	}
-	slices.Sort(names)
-	b, _ := json.Marshal(names)
+	b, _ := json.Marshal(append([]string{}, u.on...)) // [] when none, not null
 	f, err := os.CreateTemp(filepath.Dir(u.path), ".apps-*.json")
 	if err != nil {
 		return err
@@ -274,26 +342,28 @@ func (u *UI) mux() http.Handler {
 		// so a server's databases and helpers don't bury the apps.
 		var rows, others []row
 		for _, a := range u.apps {
-			if r := (row{App: a, On: u.on[a.Name]}); a.Unsupported && !r.On {
+			if r := (row{App: a, On: u.isOn(a.Name)}); a.Unsupported && !r.On {
 				others = append(others, r)
 			} else {
 				rows = append(rows, r)
 			}
 		}
 		// On but gone: listed so it can still be turned off.
-		for _, n := range slices.Sorted(maps.Keys(u.on)) {
+		for _, n := range slices.Sorted(slices.Values(u.on)) {
 			if _, ok := find(u.apps, n); !ok {
 				rows = append(rows, row{App: App{Name: n}, On: true, Missing: true, Unchecked: u.problem != ""})
 			}
 		}
-		problem := u.problem
+		problem, plan, notice := u.problem, u.planLine(), u.notice
 		u.mu.Unlock()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
 		pages.ExecuteTemplate(w, "apps", struct {
 			Apps, Others                       []row
 			Problem, Error, Supported, Account string
-		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account})
+			Incidents                          []incidentRow
+			Plan, Notice                       string
+		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account, u.incidents(), plan, notice})
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusOK, "")
@@ -308,7 +378,7 @@ func (u *UI) mux() http.Handler {
 	mux.HandleFunc("GET /apps/{name}/status", func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
 		a, ok := find(u.apps, r.PathValue("name"))
-		on := u.on[a.Name]
+		on := u.isOn(a.Name)
 		u.mu.Unlock()
 		if !ok {
 			http.Error(w, "App is not running", http.StatusNotFound)
@@ -341,6 +411,32 @@ func (u *UI) mux() http.Handler {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 	return mux
+}
+
+type incidentRow struct {
+	Name, Visitor, Ago string // Name "" for names not turned on
+	SignIn             bool
+	Count              int
+}
+
+// incidents are the router's newest 20, by app name.
+func (u *UI) incidents() []incidentRow {
+	all := u.router.Incidents()
+	var rows []incidentRow
+	for _, in := range all[:min(len(all), 20)] {
+		rows = append(rows, incidentRow{strings.TrimSuffix(in.Host, "."+u.zone), in.Visitor, ago(u.now().Sub(in.Last)), in.SignIn, in.Count})
+	}
+	return rows
+}
+
+func ago(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%d h ago", int(d.Hours()))
 }
 
 func (u *UI) handler() http.Handler { return guard(u.mux()) }

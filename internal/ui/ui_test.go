@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -296,7 +297,8 @@ func TestPage(t *testing.T) {
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer up.Close()
-	u := Load(filepath.Join(t.TempDir(), "apps.json"), proxy.NewRouter(), "u.farstu.test")
+	rt := proxy.NewRouter()
+	u := Load(filepath.Join(t.TempDir(), "apps.json"), rt, "u.farstu.test")
 	u.SetApps(map[string]discover.App{"immich": {Upstream: up.Listener.Addr().String()}}, nil)
 	u.Account = "https://api.farstu.test/account"
 	u.Probe = func(context.Context, string) (api.ProbeResponse, error) { return api.ProbeResponse{LatencyMS: 7}, nil }
@@ -327,6 +329,21 @@ func TestPage(t *testing.T) {
 	if _, body := get("localhost:7080", "/"); strings.Contains(body, "<details>") || !strings.Contains(body, `Unsupported</span>`) {
 		t.Errorf("unsupported app that is on: %s", body)
 	}
+
+	// Nothing to see: no section. A scan: shown.
+	if _, body := get("localhost:7080", "/"); strings.Contains(body, "Last 24 hours") {
+		t.Errorf("incidents without any: %s", body)
+	}
+	for range 20 {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = "admin.u.farstu.test"
+		req.RemoteAddr = "192.0.2.1:1"
+		rt.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	if _, body := get("localhost:7080", "/"); !strings.Contains(body, "20 requests for names that aren't turned on from 192.0.2.1") ||
+		!strings.Contains(body, "</script>") { // rendered to the end
+		t.Errorf("incidents: %s", body)
+	}
 }
 
 func TestHomeNetwork(t *testing.T) {
@@ -351,7 +368,7 @@ func TestHomeNetwork(t *testing.T) {
 func TestAppLimit(t *testing.T) {
 	u := Load(filepath.Join(t.TempDir(), "apps.json"), proxy.NewRouter(), "u.farstu.test")
 	u.SetApps(map[string]discover.App{"a": {Upstream: "127.0.0.1:1"}, "b": {Upstream: "127.0.0.1:2"}, "c": {Upstream: "127.0.0.1:3"}}, nil)
-	u.SetAppLimit(2)
+	u.SetPlan(api.Me{Plan: "free", AppLimit: 2})
 	for _, n := range []string{"a", "b"} {
 		if err := u.Set(n, true); err != nil {
 			t.Fatal(err)
@@ -377,7 +394,7 @@ func TestAppLimit(t *testing.T) {
 	if err := u.Set("c", true); err != nil {
 		t.Fatalf("after turning one off: %v", err)
 	}
-	u.SetAppLimit(0)
+	u.SetPlan(api.Me{Plan: "paid"})
 	if err := u.Set("a", true); err != nil {
 		t.Fatalf("no limit: %v", err)
 	}
@@ -416,5 +433,85 @@ func TestNotSetUp(t *testing.T) {
 	u.SetApps(setUp, nil)
 	if !routed() {
 		t.Fatal("not routed again once set up")
+	}
+}
+
+// When paid time ends, the apps turned on last go off, so the relay accepts
+// the proxy for the rest; frpc reconnects whenever its proxy changes.
+func TestPlanDowngrade(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer up.Close()
+	path := filepath.Join(t.TempDir(), "apps.json")
+	rt := proxy.NewRouter()
+	u := Load(path, rt, "u.farstu.test")
+	restarts := 0
+	u.Restart = func() { restarts++ }
+	running := map[string]discover.App{}
+	for _, n := range []string{"a", "b", "c"} {
+		running[n] = discover.App{Upstream: up.Listener.Addr().String()}
+	}
+	u.SetApps(running, nil)
+	routed := func(name string) bool {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = name + ".u.farstu.test"
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, req)
+		return rec.Code != 404
+	}
+
+	paidUntil := time.Now().Add(36 * time.Hour)
+	u.SetPlan(api.Me{Plan: "paid", PaidUntil: paidUntil})
+	if u.Hosts() != nil || restarts != 0 {
+		t.Fatalf("paid: hosts %v, %d restarts; want the wildcard, no restart before frpc runs", u.Hosts(), restarts)
+	}
+	if body := page(u.handler()); !strings.Contains(body, "Paid plan: 2 days left.") {
+		t.Errorf("page: %s", body)
+	}
+	for _, n := range []string{"c", "a", "b"} { // turn-on order, not alphabetical
+		if err := u.Set(n, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if restarts != 0 {
+		t.Fatalf("paid toggles restarted frpc %d times", restarts)
+	}
+
+	u.SetPlan(api.Me{Plan: "free", AppLimit: 2})
+	if !routed("c") || !routed("a") || routed("b") {
+		t.Fatalf("routed c %v, a %v, b %v; want the first two turned on", routed("c"), routed("a"), routed("b"))
+	}
+	if got := u.Hosts(); !slices.Equal(got, []string{"c.u.farstu.test", "a.u.farstu.test"}) {
+		t.Fatalf("hosts %v", got)
+	}
+	if restarts != 1 {
+		t.Fatalf("%d restarts after the downgrade, want 1", restarts)
+	}
+	if body := page(u.handler()); !strings.Contains(body, "so b turned off") || !strings.Contains(body, "Free plan: 2 apps") {
+		t.Errorf("page: %s", body)
+	}
+	if b, _ := os.ReadFile(path); string(b) != `["c","a"]` {
+		t.Fatalf("saved %s", b)
+	}
+
+	// Free toggles change the proxy's hosts.
+	u.Set("c", false)
+	if got := u.Hosts(); !slices.Equal(got, []string{"a.u.farstu.test"}) || restarts != 2 {
+		t.Fatalf("after off: hosts %v, %d restarts", got, restarts)
+	}
+	u.Set("c", false) // already off
+	if restarts != 2 {
+		t.Fatalf("turning off an app that is off restarted frpc")
+	}
+	u.SetPlan(api.Me{Plan: "free", AppLimit: 2}) // the next minute's answer
+	if restarts != 2 {
+		t.Fatalf("an unchanged plan restarted frpc")
+	}
+
+	// A restart keeps the order; with no apps the proxy serves nothing.
+	u = Load(path, rt, "u.farstu.test")
+	u.SetPlan(api.Me{Plan: "free", AppLimit: 2})
+	u.Set("a", false)
+	if got := u.Hosts(); got == nil || len(got) != 0 {
+		t.Fatalf("free with no apps: %#v, want empty, not the wildcard", got)
 	}
 }
