@@ -25,7 +25,9 @@ part of this repository; `api/` is the full protocol between the two.
    is what makes an app unsafe: we refuse to expose a fresh install whose
    first visitor becomes admin, we rate limit sign-ins at the app's login
    path, and we don't support apps that skip their login for "local"
-   addresses (through us, every visitor looks local).
+   addresses (through us, every visitor looks local). Containers without a
+   recipe can be turned on too, as unsupported apps, under a warning that
+   none of this is checked for them.
 3. **Default deny.** Unknown hostnames are rejected. Missing/corrupt state means
    everything is OFF. Client offline means nothing is reachable.
 4. **The off switch must be instant and trustworthy.** Enforcement is local in
@@ -56,7 +58,9 @@ visitor ──TLS──▶ relay (stock frps, routes on SNI, never decrypts)
   another server, account deleted), the client forgets the device and which
   apps were on, and the local page asks to connect again.
 - **Discovery** runs over the Docker socket (Engine API, following container
-  start/die events), matching `recipes/*.yaml` against image names.
+  start/die events), matching `recipes/*.yaml` against image names. Other
+  containers with a TCP port are listed as unsupported, named after the
+  container, at that port (80 if several, else none is guessed).
 - **Tunnel:** a pinned [frp](https://github.com/fatedier/frp) `frpc` runs as
   a subprocess with one `https` proxy for `*.<user>.<ourdomain>` and PROXY v2.
 - **TLS:** one wildcard certificate per user from Let's Encrypt via DNS-01

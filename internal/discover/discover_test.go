@@ -302,3 +302,49 @@ func TestSetupChecks(t *testing.T) {
 		t.Error("excalidraw: want no_login, it has no setup to check")
 	}
 }
+
+// Containers no recipe knows are listed as unsupported, except where routing
+// them could reach this client's page or another app's switch.
+func TestWatchUnsupported(t *testing.T) {
+	ct := func(name, ip, ports string) string {
+		return `{"Names":["/` + name + `"],"Image":"someone/app:1","HostConfig":{"NetworkMode":"bridge"},
+			"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"` + ip + `"}}},"Ports":[` + ports + `]}`
+	}
+	tcp := func(p int) string { return fmt.Sprintf(`{"PrivatePort":%d,"Type":"tcp"}`, p) }
+	running := "[" + strings.Join([]string{
+		ct("My_Wiki", "172.17.0.2", tcp(3000)+","+tcp(3000)), // listed once per IPv4 and IPv6 binding
+		ct("web", "172.17.0.3", tcp(443)+","+tcp(80)+`,{"PrivatePort":53,"Type":"udp"}`),
+		ct("gitlike", "172.17.0.4", tcp(22)+","+tcp(3000)),
+		ct("dup_a", "172.17.0.5", tcp(80)),
+		ct("dup-a", "172.17.0.6", tcp(80)),
+		ct("immich", "172.17.0.7", tcp(80)),  // a recipe's name
+		ct("farstu", "127.0.0.1", tcp(7080)), // this client
+		ct("db", "172.17.0.8", ""),           // no ports
+		ct("noip", "", tcp(80)),
+	}, ",") + "]"
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/json", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, running) })
+	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	r := <-watchResults(t, fakeDocker(t, mux))
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if p := r.apps["gitlike"].Problem; !strings.Contains(p, "several ports [22 3000]") {
+		t.Errorf("several ports: %q", p)
+	}
+	if p := r.apps["dup-a"].Problem; !strings.Contains(p, "More than one container is named dup-a") {
+		t.Errorf("same label: %q", p)
+	}
+	delete(r.apps, "gitlike")
+	delete(r.apps, "dup-a")
+	want := map[string]App{
+		"my-wiki": {Upstream: "172.17.0.2:3000", Unsupported: true},
+		"web":     {Upstream: "172.17.0.3:80", Unsupported: true},
+	}
+	if !maps.Equal(r.apps, want) {
+		t.Errorf("got %v, want %v", r.apps, want)
+	}
+}

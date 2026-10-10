@@ -1,5 +1,6 @@
-// Package discover finds installed apps: running Docker containers that
-// match a recipe. It talks to the Docker API over its socket.
+// Package discover finds installed apps: running Docker containers, those
+// that match a recipe and, marked unsupported, the others with a port. It
+// talks to the Docker API over its socket.
 package discover
 
 import (
@@ -27,6 +28,10 @@ import (
 type App struct {
 	Upstream string // e.g. "172.18.0.5:2283"
 	Problem  string // user-facing, e.g. not set up yet; set means don't route it
+	// Unsupported: no recipe knows the container, so nothing checks it has
+	// an admin account, limits password guessing at its login, or knows it
+	// asks every visitor for a password.
+	Unsupported bool
 }
 
 // Watch calls found with the apps running now, by name, and again whenever
@@ -208,7 +213,8 @@ func set(v any) bool {
 }
 
 type container struct {
-	ID         string // JSON field names match case-insensitively
+	ID         string   // JSON field names match case-insensitively
+	Names      []string // e.g. "/immich_server"
 	Image      string
 	HostConfig struct {
 		NetworkMode string
@@ -216,7 +222,12 @@ type container struct {
 	NetworkSettings struct {
 		Networks map[string]struct{ IPAddress string }
 	}
-	Ports []struct{ PrivatePort int }
+	Ports []portMapping
+}
+
+type portMapping struct {
+	PrivatePort int
+	Type        string // "tcp", "udp"
 }
 
 func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]App, error) {
@@ -227,6 +238,7 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]
 		return nil, err
 	}
 	apps := map[string]App{}
+	var unknown []container
 	for _, ct := range cs {
 		image, err := imageName(ctx, c, ct)
 		if err != nil {
@@ -234,7 +246,11 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]
 			continue
 		}
 		r, ok := recipes.Find(rs, image)
-		if !ok || !exposes(ct, r.UpstreamPort) {
+		if !ok {
+			unknown = append(unknown, ct)
+			continue
+		}
+		if !exposes(ct, r.UpstreamPort) {
 			continue
 		}
 		if _, dup := apps[r.App]; dup {
@@ -246,7 +262,84 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]
 			apps[r.App] = App{Upstream: net.JoinHostPort(ip, strconv.Itoa(r.UpstreamPort))}
 		}
 	}
+	self := ownIPs()
+	for _, ct := range unknown {
+		name, a, ok := unsupported(ct, rs, self)
+		if !ok {
+			continue
+		}
+		if _, dup := apps[name]; dup { // e.g. "my_app" and "my-app"
+			a = App{Unsupported: true, Problem: "More than one container is named " + name + "; rename one"}
+		}
+		apps[name] = a
+	}
 	return apps, nil
+}
+
+// unsupported makes an app of a container no recipe knows: named after the
+// container, at the one TCP port it listens on, or 80 among several.
+// Skipped: names a recipe uses, so a switch left on for a recipe's app never
+// routes to another one; containers without ports (host networking lists
+// none, and its 127.0.0.1 could be anything); and this client's own
+// container, whose local page holds the switches.
+func unsupported(ct container, rs []recipes.Recipe, self map[string]bool) (string, App, bool) {
+	if len(ct.Names) == 0 {
+		return "", App{}, false
+	}
+	name := hostLabel(ct.Names[0])
+	ip := address(ct)
+	if name == "" || ip == "" || self[ip] || slices.ContainsFunc(rs, func(r recipes.Recipe) bool { return r.App == name }) {
+		return "", App{}, false
+	}
+	var ports []int
+	for _, p := range ct.Ports {
+		if p.Type == "tcp" && !slices.Contains(ports, p.PrivatePort) {
+			ports = append(ports, p.PrivatePort)
+		}
+	}
+	slices.Sort(ports)
+	var port int
+	switch {
+	case len(ports) == 0:
+		return "", App{}, false
+	case len(ports) == 1:
+		port = ports[0]
+	case slices.Contains(ports, 80):
+		port = 80
+	default:
+		return name, App{Unsupported: true, Problem: fmt.Sprintf("It listens on several ports %v; Farstu can't tell which one is its web page", ports)}, true
+	}
+	return name, App{Upstream: net.JoinHostPort(ip, strconv.Itoa(port)), Unsupported: true}, true
+}
+
+// hostLabel turns a container name into a DNS label: "/Immich_Server" is
+// "immich-server". Empty if it can't be one.
+func hostLabel(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + 'a' - 'A'
+		case r == '_' || r == '.' || r == '-':
+			return '-'
+		}
+		return -1
+	}, strings.TrimPrefix(name, "/"))
+	return strings.Trim(name[:min(len(name), 63)], "-")
+}
+
+// ownIPs are this machine's addresses: a container at one of them is this
+// client itself.
+func ownIPs() map[string]bool {
+	addrs, _ := net.InterfaceAddrs()
+	ips := map[string]bool{}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			ips[n.IP.String()] = true
+		}
+	}
+	return ips
 }
 
 // imageName is the image the container was created from. Once its tag is
@@ -265,7 +358,7 @@ func imageName(ctx context.Context, c *http.Client, ct container) (string, error
 // "fpm" variant of an image whose recipe wants HTTP. Containers on host
 // networking list no ports and are taken on trust.
 func exposes(ct container, port int) bool {
-	return len(ct.Ports) == 0 || slices.ContainsFunc(ct.Ports, func(p struct{ PrivatePort int }) bool { return p.PrivatePort == port })
+	return len(ct.Ports) == 0 || slices.ContainsFunc(ct.Ports, func(p portMapping) bool { return p.PrivatePort == port })
 }
 
 // address is where the client reaches a container: loopback for host

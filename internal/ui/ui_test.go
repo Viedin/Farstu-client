@@ -314,6 +314,19 @@ func TestPage(t *testing.T) {
 	if code, _ := get("localhost:7080", "/apps/nope/status"); code != 404 {
 		t.Errorf("unknown app status: %d", code)
 	}
+
+	// Unsupported apps that are off are folded away; turned on, they join the apps.
+	u.SetApps(map[string]discover.App{
+		"immich": {Upstream: up.Listener.Addr().String()},
+		"wiki":   {Upstream: up.Listener.Addr().String(), Unsupported: true},
+	}, nil)
+	if _, body := get("localhost:7080", "/"); !strings.Contains(body, "Other containers (1)") || strings.Index(body, `aria-label="wiki"`) < strings.Index(body, "<details>") {
+		t.Errorf("unsupported app not folded away: %s", body)
+	}
+	u.Set("wiki", true)
+	if _, body := get("localhost:7080", "/"); strings.Contains(body, "<details>") || !strings.Contains(body, `Unsupported</span>`) {
+		t.Errorf("unsupported app that is on: %s", body)
+	}
 }
 
 func TestHomeNetwork(t *testing.T) {

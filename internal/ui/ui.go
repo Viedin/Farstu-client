@@ -33,6 +33,8 @@ type App struct {
 	Host     string // e.g. "immich.calm-otter-k3x9qf2m.farstu.dev"
 	Upstream string // e.g. "172.18.0.5:2283"
 	Problem  string // why it can't be turned on, e.g. two containers match
+	// Unsupported: no recipe; the page warns Farstu can't vouch it's safe.
+	Unsupported bool
 }
 
 // An app that is on and gone this long was uninstalled, not updated: it is
@@ -97,7 +99,7 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 	apps := []App{}
 	for _, n := range slices.Sorted(maps.Keys(running)) {
 		r := running[n]
-		apps = append(apps, App{Name: n, Host: n + "." + u.zone, Upstream: r.Upstream, Problem: r.Problem})
+		apps = append(apps, App{Name: n, Host: n + "." + u.zone, Upstream: r.Upstream, Problem: r.Problem, Unsupported: r.Unsupported})
 	}
 	now, forgot := u.now(), false
 	for n := range u.on {
@@ -265,16 +267,23 @@ func (u *UI) mux() http.Handler {
 		type row struct {
 			App
 			On, Missing bool
+			Unchecked   bool // missing while Docker can't be asked
 		}
 		u.mu.Lock()
-		var rows []row
+		// Apps: supported or on. Others: unsupported and off, folded away
+		// so a server's databases and helpers don't bury the apps.
+		var rows, others []row
 		for _, a := range u.apps {
-			rows = append(rows, row{App: a, On: u.on[a.Name]})
+			if r := (row{App: a, On: u.on[a.Name]}); a.Unsupported && !r.On {
+				others = append(others, r)
+			} else {
+				rows = append(rows, r)
+			}
 		}
 		// On but gone: listed so it can still be turned off.
 		for _, n := range slices.Sorted(maps.Keys(u.on)) {
 			if _, ok := find(u.apps, n); !ok {
-				rows = append(rows, row{App: App{Name: n}, On: true, Missing: true})
+				rows = append(rows, row{App: App{Name: n}, On: true, Missing: true, Unchecked: u.problem != ""})
 			}
 		}
 		problem := u.problem
@@ -282,9 +291,9 @@ func (u *UI) mux() http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
 		pages.ExecuteTemplate(w, "apps", struct {
-			Apps                               []row
+			Apps, Others                       []row
 			Problem, Error, Supported, Account string
-		}{rows, problem, errMsg, strings.Join(u.Supported, ", "), u.Account})
+		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account})
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusOK, "")

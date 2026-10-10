@@ -2,22 +2,15 @@
 <p class="muted">Turn an app on to reach it from anywhere, also from its phone app.</p>
 {{with .Problem}}<p class="card error">{{.}}</p>{{end}}
 {{with .Error}}<p class="card error">{{.}}</p>{{end}}
-{{range .Apps}}<form class="card" method="post" action="/apps/{{.Name}}">
-<div class="row"><div>
-<div class="name">{{.Name}}</div>
-{{if and .Missing $.Problem}}<div class="host muted">Can't check whether it's running</div>
-{{else if .Missing}}<div class="host bad">Not running. Turns off by itself if it's not back within a day.</div>
-{{else if .Problem}}<div class="host bad">{{.Problem}}</div>
-{{else if .On}}<a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
-{{else}}<div class="host muted">Off, not reachable from the internet</div>{{end}}
-</div>
-<button class="switch" role="switch" aria-checked="{{.On}}" aria-label="{{.Name}}" name="on" value="{{if .On}}0{{else}}1{{end}}"></button>
-</div>
-{{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}">Checking…</div>{{end}}
-</form>
+{{range .Apps}}{{template "app" .}}
 {{else}}{{if not .Problem}}<p class="card">No supported apps are running.{{with .Supported}} Farstu works with {{.}}.{{end}}</p>{{end}}
 {{end}}
-{{with .Account}}<p class="muted"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
+{{with .Others}}<details>
+<summary>Other containers ({{len .}})</summary>
+<p class="muted">Farstu doesn't support these, so it can't check that they ask every visitor for a password, or slow down password guessing. Turn one on only if you know it's safe on the internet.</p>
+{{range .}}{{template "app" .}}
+{{end}}</details>{{end}}
+{{with .Account}}<p class="muted foot"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
 <script>
 for (const el of document.querySelectorAll("[data-app]")) {
   fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
@@ -26,3 +19,17 @@ for (const el of document.querySelectorAll("[data-app]")) {
     .catch(() => { el.textContent = "Could not check this app"; el.className = "status bad" })
 }
 </script>{{end}}
+
+{{define "app"}}<form class="card" method="post" action="/apps/{{.Name}}">
+<div class="row"><div>
+<div class="name">{{.Name}}{{if .Unsupported}} <span class="tag">Unsupported</span>{{end}}</div>
+{{if .Unchecked}}<div class="host muted">Can't check whether it's running</div>
+{{else if .Missing}}<div class="host bad">Not running. Turns off by itself if it's not back within a day.</div>
+{{else if .Problem}}<div class="host bad">{{.Problem}}</div>
+{{else if .On}}<a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
+{{else}}<div class="host muted">Off, not reachable from the internet</div>{{end}}
+</div>
+<button class="switch" role="switch" aria-checked="{{.On}}" aria-label="{{.Name}}" name="on" value="{{if .On}}0{{else}}1{{end}}"></button>
+</div>
+{{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}">Checking…</div>{{end}}
+</form>{{end}}
