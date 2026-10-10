@@ -1,6 +1,6 @@
 {{define "connect"}}{{template "head" true}}
 <div class="card">
-{{if .Disconnected}}<p class="bad">This server was disconnected from its Farstu account, so your apps can't be reached and are off. Connect it again to turn them back on.</p>{{end}}
+{{if .Disconnected}}<p class="bad">This server was disconnected from its Farstu account, so your apps can't be reached and were turned off. Connect it again, then turn your apps back on.</p>{{end}}
 {{with .VerificationURIComplete}}
 <p class="name">Connect this server</p>
 <p>Open the link, sign in or create an account, check that it shows the code below, and click Connect.</p>

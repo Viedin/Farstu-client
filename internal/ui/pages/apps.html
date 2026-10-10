@@ -19,12 +19,17 @@
 <p class="muted">Every address on the internet gets scanned; visitors only reach apps you turned on. Blocked sign-ins mean someone is guessing passwords: make sure that app's passwords are strong.</p>{{end}}
 {{with .Account}}<p class="muted foot"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
 <script>
-for (const el of document.querySelectorAll("[data-app]")) {
-  fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
-    .then(r => r.json())
-    .then(s => { el.textContent = s.text; el.className = "status " + (s.ok ? "ok" : "bad") })
-    .catch(() => { el.textContent = "Could not check this app"; el.className = "status bad" })
-}
+// An app just turned on reconnects the tunnel, and right after connecting
+// the certificate is still on its way: keep checking an app that is on for
+// about 30s before showing why it can't be reached.
+const check = (el, tries) => fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
+  .then(r => r.json())
+  .then(s => {
+    if (!s.ok && el.dataset.on === "true" && tries > 1) return setTimeout(() => check(el, tries - 1), 3000)
+    el.textContent = s.text; el.className = "status " + (s.ok ? "ok" : "bad")
+  })
+  .catch(() => { el.textContent = "Could not check this app"; el.className = "status bad" })
+for (const el of document.querySelectorAll("[data-app]")) check(el, 8)
 </script>{{end}}
 
 {{define "app"}}<form class="card" method="post" action="/apps/{{.Name}}">
@@ -38,5 +43,5 @@ for (const el of document.querySelectorAll("[data-app]")) {
 </div>
 <button class="switch" role="switch" aria-checked="{{.On}}" aria-label="{{.Name}}" name="on" value="{{if .On}}0{{else}}1{{end}}"></button>
 </div>
-{{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}">Checking…</div>{{end}}
+{{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}" data-on="{{.On}}">Checking…</div>{{end}}
 </form>{{end}}

@@ -180,7 +180,7 @@ func (u *UI) Set(name string, on bool) error {
 	}
 	// The relay enforces this too; refusing here says why.
 	if limit := u.plan.AppLimit; limit > 0 && len(u.on) >= limit {
-		return refusal(fmt.Sprintf("The free plan allows %d apps at once. Turn one off first, or upgrade to turn on more", limit))
+		return refusal(fmt.Sprintf("The free plan allows %d apps at once. Turn one off first", limit))
 	}
 	u.on = append(u.on, name)
 	if err := u.save(); err != nil {
@@ -206,7 +206,7 @@ func (u *UI) SetPlan(me api.Me) {
 			u.turnOff(n)
 		}
 		slog.Info("over the plan's app limit, turned apps off", "apps", off, "limit", limit)
-		u.notice = fmt.Sprintf("The free plan allows %d apps at once, so %s turned off. Upgrade to turn on more.", limit, strings.Join(off, " and "))
+		u.notice = fmt.Sprintf("The free plan allows %d apps at once, so %s turned off.", limit, strings.Join(off, " and "))
 		if err := u.save(); err != nil {
 			slog.Error("could not save apps turned off by the plan; the plan turns them off again after a restart", "err", err)
 		}
