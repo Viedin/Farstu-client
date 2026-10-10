@@ -254,6 +254,9 @@ func (u *UI) status(ctx context.Context, a App, on bool, tunnel error) (msg stri
 //go:embed pages/*.html
 var pageFiles embed.FS
 
+//go:embed icon.svg
+var icon []byte
+
 var pages = template.Must(template.ParseFS(pageFiles, "pages/*.html"))
 
 func (u *UI) mux() http.Handler {
@@ -285,6 +288,11 @@ func (u *UI) mux() http.Handler {
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusOK, "")
+	})
+	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Write(icon)
 	})
 	// Status is fetched by the page after it loads: the outside check takes
 	// up to 5s and the toggles should not wait for it.

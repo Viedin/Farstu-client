@@ -1,4 +1,4 @@
-# Farstu Client
+# <img src="internal/ui/icon.svg" width="32" alt=""> Farstu Client
 
 **Farstu** (Swedish for a house's entrance hall: the space between your home
 and the outside world).
