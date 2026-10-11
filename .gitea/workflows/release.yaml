@@ -16,11 +16,15 @@ jobs:
           buildkitd-config-inline: |
             [registry."${{ env.REGISTRY }}"]
               http = ${{ startsWith(github.server_url, 'http://') }}
-      - uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.PACKAGES_TOKEN }}
+      # Not docker/login-action: docker login goes through the runner's daemon,
+      # which refuses an http registry. buildx reads this file directly.
+      - run: |
+          mkdir -p ~/.docker
+          auth=$(printf '%s:%s' "$OWNER" "$TOKEN" | base64 -w0)
+          printf '{"auths":{"%s":{"auth":"%s"}}}' "$REGISTRY" "$auth" > ~/.docker/config.json
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TOKEN: ${{ secrets.PACKAGES_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
           context: .
