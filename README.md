@@ -14,6 +14,39 @@ what it can reach, and that your TLS keys never leave your machine. The Farstu
 Server (accounts, relay authorization, DNS, billing) is run by us and is not
 part of this repository; `api/` is the full protocol between the two.
 
+## Quick start
+
+On the server that runs your apps (Linux with Docker), clone this repository
+and save this as `compose.yaml` next to this README:
+
+```yaml
+services:
+  farstu-client:
+    build: .
+    network_mode: host # reaches your apps; the local page is on :7080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock # finds your apps
+      - farstu-client:/data                       # registration, which apps are on, activity
+    restart: unless-stopped
+
+volumes:
+  farstu-client:
+```
+
+```sh
+docker compose up -d --build
+```
+
+1. Open `http://<your server's IP>:7080` from your home network.
+2. Click **Connect to Farstu**, sign in or create an account, and approve
+   the code shown on the page (it is also in `docker compose logs`).
+3. Back on the local page, turn an app on. Once its status says
+   "Reachable from the internet", open it at `https://<app>.<user>.farstu.app`,
+   also from its phone app.
+
+Apps start off, and turning one off takes effect at once. The local page only
+answers from your home network.
+
 ## Product principles
 
 1. **No extra login layer.** We rely on each app's own login and user
