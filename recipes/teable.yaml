@@ -1,0 +1,11 @@
+app: teable
+match: { images: ["ghcr.io/teableio/teable", "ghcr.io/teableio/teable-community"] }
+upstream_port: 3000
+# The first account to sign up becomes admin. Only an admin can turn
+# sign-ups off, so once they are off there is one.
+setup_done:
+  path: /api/admin/setting/public
+  field: disallowSignUp
+  message: Teable lets anyone sign up, and its first account becomes admin. Create your account from your home network, then turn off sign-ups in its admin settings
+login:
+  - { method: POST, path: /api/auth/signin }

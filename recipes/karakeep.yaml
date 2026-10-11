@@ -1,0 +1,15 @@
+app: karakeep
+match: { images: ["ghcr.io/karakeep-app/karakeep", "ghcr.io/hoarder-app/hoarder"] }
+upstream_port: 3000
+# The first account to sign up becomes admin, and nothing public says
+# whether it exists yet: wait for sign-ups to be off.
+setup_done:
+  path: /api/trpc/config.clientConfig
+  field: result.data.json.auth.disableSignups
+  message: Karakeep lets anyone sign up, and its first account becomes admin. Create your account from your home network, then set DISABLE_SIGNUPS=true
+# Not covered: a tRPC batch that puts apiKeys.exchange after another
+# procedure in one path.
+login:
+  - { method: POST, path: /api/auth/sign-in/email }
+  - { method: POST, path: /api/auth/callback/credentials } # before better-auth, and Hoarder
+  - { method: POST, path: /api/trpc/apiKeys.exchange }      # phone app and browser extension

@@ -1,0 +1,10 @@
+app: weknora
+match: { images: ["wechatopenai/weknora-ui"] } # the web UI; it proxies /api to weknora-app
+upstream_port: 80
+# No first-visitor admin: the system admin is named by
+# WEKNORA_BOOTSTRAP_SYSTEM_ADMIN_EMAIL, and each new account gets its own
+# space. This just checks WeKnora answers. Open sign-ups (on by default; new
+# accounts can use built-in models) are the user's call.
+setup_done: { path: /api/v1/auth/config, field: success }
+login:
+  - { method: POST, path: /api/v1/auth/login }

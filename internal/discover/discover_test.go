@@ -285,6 +285,16 @@ func TestSetupChecks(t *testing.T) {
 		{"komga", "GET /api/v1/claim", 200, `{"isClaimed":false}`, false},
 		{"navidrome", "GET /app/", 200, `<script>window.__APP_CONFIG__ = "{\"firstTime\":false,\"version\":\"x\"}"</script>`, true},
 		{"navidrome", "GET /app/", 200, `<script>window.__APP_CONFIG__ = "{\"firstTime\":true,\"version\":\"x\"}"</script>`, false},
+		{"karakeep", "GET /api/trpc/config.clientConfig", 200, `{"result":{"data":{"json":{"auth":{"disableSignups":true,"disablePasswordAuth":false}}}}}`, true},
+		{"karakeep", "GET /api/trpc/config.clientConfig", 200, `{"result":{"data":{"json":{"auth":{"disableSignups":false,"disablePasswordAuth":false}}}}}`, false},
+		{"karakeep", "GET /api/trpc/config.clientConfig", 404, ``, false}, // older Hoarder
+		{"linkwarden", "GET /api/v1/config", 200, `{"response":{"DISABLE_REGISTRATION":true,"ADMIN":null}}`, true},
+		{"linkwarden", "GET /api/v1/config", 200, `{"response":{"DISABLE_REGISTRATION":null,"ADMIN":null}}`, false},
+		{"teable", "GET /api/admin/setting/public", 200, `{"instanceId":"x","disallowSignUp":true}`, true},
+		{"teable", "GET /api/admin/setting/public", 200, `{"instanceId":"x","disallowSignUp":null}`, false},
+		{"teable", "GET /api/admin/setting/public", 200, `{"instanceId":""}`, false},
+		{"weknora", "GET /api/v1/auth/config", 200, `{"success":true,"registration_mode":"self_serve"}`, true},
+		{"weknora", "GET /api/v1/auth/config", 200, `<!doctype html>`, false}, // the UI without the app behind it
 	} {
 		i := slices.IndexFunc(rs, func(r recipes.Recipe) bool { return r.App == tt.app })
 		if i < 0 {

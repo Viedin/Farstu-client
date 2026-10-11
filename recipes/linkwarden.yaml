@@ -1,0 +1,13 @@
+app: linkwarden
+match: { images: ["ghcr.io/linkwarden/linkwarden"] }
+upstream_port: 3000
+# Sign-up is open and the first account (user 1, or NEXT_PUBLIC_ADMIN) is
+# the server admin, and nothing public says whether it exists yet: wait for
+# registration to be off.
+setup_done:
+  path: /api/v1/config
+  field: response.DISABLE_REGISTRATION
+  message: Linkwarden lets anyone sign up, and its first account becomes admin. Create your account from your home network, then set NEXT_PUBLIC_DISABLE_REGISTRATION=true
+login:
+  - { method: POST, path: /api/v1/auth/callback/credentials }
+  - { method: POST, path: /api/v1/session } # phone app and browser extension
