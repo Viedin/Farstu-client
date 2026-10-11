@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -330,9 +331,13 @@ func TestPage(t *testing.T) {
 		t.Errorf("unsupported app that is on: %s", body)
 	}
 
-	// Nothing to see: no section. A scan: shown.
-	if _, body := get("localhost:7080", "/"); strings.Contains(body, "Last 24 hours") {
-		t.Errorf("incidents without any: %s", body)
+	// Nothing to see: no summary. A scan: summed up today, listed on the
+	// activity page.
+	if _, body := get("localhost:7080", "/"); strings.Contains(body, "Today:") || !strings.Contains(body, `href="/activity"`) {
+		t.Errorf("activity without any: %s", body)
+	}
+	if _, body := get("localhost:7080", "/activity"); !strings.Contains(body, "Nothing in the last 30 days") {
+		t.Errorf("activity page without any: %s", body)
 	}
 	for range 20 {
 		req := httptest.NewRequest("GET", "/", nil)
@@ -340,9 +345,62 @@ func TestPage(t *testing.T) {
 		req.RemoteAddr = "192.0.2.1:1"
 		rt.ServeHTTP(httptest.NewRecorder(), req)
 	}
-	if _, body := get("localhost:7080", "/"); !strings.Contains(body, "20 requests for names that aren't turned on from 192.0.2.1") ||
+	if _, body := get("localhost:7080", "/"); !strings.Contains(body, `<a class="card" href="/activity">Today: 1 visitor scanning →</a>`) ||
 		!strings.Contains(body, "</script>") { // rendered to the end
-		t.Errorf("incidents: %s", body)
+		t.Errorf("today: %s", body)
+	}
+	if _, body := get("localhost:7080", "/activity"); !strings.Contains(body, "20 requests for names that aren&#39;t turned on from 192.0.2.1") ||
+		!strings.Contains(body, `class="bar" style="width:100%"`) {
+		t.Errorf("activity page: %s", body)
+	}
+}
+
+// Guardrail: guessing or scanning a little every day adds up over 30 days;
+// a phone missing a few thumbnails doesn't.
+func TestActivityAddsUp(t *testing.T) {
+	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	u := Load(filepath.Join(t.TempDir(), "apps.json"), proxy.NewRouter(), "u.farstu.test")
+	u.now = func() time.Time { return now }
+	var all []proxy.Activity
+	for d := range 5 {
+		day := time.Date(2026, 10, 10-d, 0, 0, 0, 0, time.UTC)
+		last := day.Add(time.Hour)
+		all = append(all,
+			proxy.Activity{Day: day, Host: "immich.u.farstu.test", Visitor: "203.0.113.7", Failed: 1, Last: last},
+			proxy.Activity{Day: day, Host: "immich.u.farstu.test", Visitor: "198.51.100.1", NotFound: 3, Last: last},
+			proxy.Activity{Day: day, Host: "immich.u.farstu.test", Visitor: "198.51.100.2", NotFound: 4, Last: last},
+		)
+	}
+	var got []string
+	for _, v := range u.visitors(all) {
+		got = append(got, fmt.Sprint(v.Name, ": ", v.What, " over ", v.Days, " days from ", v.Visitor, ", ", v.Ago, " ", v.SignIn))
+	}
+	want := []string{
+		"immich: 5 failed sign-ins over 5 days from 203.0.113.7, 11 h ago true",
+		"immich: 20 requests for pages that don't exist over 5 days from 198.51.100.2, 11 h ago false",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("visitors:\n%q, want\n%q", got, want)
+	}
+	if d := days(all); len(d) != 5 || d[0].Date != "Sat 10 Oct" || d[0].What != "1 failed sign-in, 7 requests for pages that don't exist" || !d[0].SignIn {
+		t.Errorf("days: %+v", d)
+	}
+	if msg, bad := u.today(all); msg != "Today: 1 sign-in failed or blocked" || !bad {
+		t.Errorf("today: %q %v", msg, bad)
+	}
+	// One visitor scanning two names is one visitor.
+	today := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	scan := []proxy.Activity{
+		{Day: today, Host: "immich.u.farstu.test", Visitor: "192.0.2.9", NotFound: 20, Last: now},
+		{Day: today, Visitor: "192.0.2.9", NotFound: 20, Last: now},
+	}
+	if msg, bad := u.today(scan); msg != "Today: 1 visitor scanning" || bad {
+		t.Errorf("today: %q %v", msg, bad)
+	}
+	for d, want := range map[time.Duration]string{30 * time.Hour: "1 day ago", 20 * 24 * time.Hour: "20 days ago", 5 * time.Hour: "5 h ago"} {
+		if got := ago(d); got != want {
+			t.Errorf("ago(%s) = %q, want %q", d, got, want)
+		}
 	}
 }
 

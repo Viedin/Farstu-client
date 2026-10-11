@@ -29,7 +29,7 @@ type Router struct {
 	mu     sync.RWMutex
 	routes map[string]*route
 	logins logins
-	seen   incidents
+	seen   activity
 }
 
 type route struct {
@@ -42,11 +42,11 @@ type route struct {
 const offMsg = "No app is turned on at this address"
 
 func NewRouter() *Router {
-	return &Router{routes: map[string]*route{}, logins: logins{by: map[string]*rate.Limiter{}}, seen: incidents{now: time.Now}}
+	return &Router{routes: map[string]*route{}, logins: logins{by: map[string]*rate.Limiter{}}, seen: newActivity()}
 }
 
-// Incidents returns the last day's blocked sign-ins and scans, newest first.
-func (rt *Router) Incidents() []Incident { return rt.seen.shown() }
+// Activity returns the last 30 days of sign-ins and pages not found, newest first.
+func (rt *Router) Activity() []Activity { return rt.seen.all() }
 
 // Enable routes host to the plain-HTTP upstream address (e.g. "127.0.0.1:2283").
 // Sign-in attempts at logins are rate limited per visitor.
@@ -63,8 +63,16 @@ func (rt *Router) Enable(host, upstream string, logins []recipes.Login) {
 			pr.Out.Header.Set("X-Real-Ip", pr.Out.Header.Get("X-Forwarded-For"))
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			if resp.StatusCode == http.StatusNotFound {
-				rt.seen.flag(normalize(host), visitor(resp.Request.RemoteAddr), false)
+			// Wrong passwords come back as 401, 403 or 400 (Vaultwarden); a
+			// 404 there is a moved endpoint, not a guess.
+			// ponytail: apps that answer a wrong password with 200 or a
+			// redirect (Nextcloud's form login) aren't counted; the limit
+			// still blocks them.
+			switch {
+			case resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusNotFound && isLogin(resp.Request, logins):
+				rt.seen.flag(normalize(host), visitor(resp.Request.RemoteAddr), failed)
+			case resp.StatusCode == http.StatusNotFound:
+				rt.seen.flag(normalize(host), visitor(resp.Request.RemoteAddr), notFound)
 			}
 			return nil
 		},
@@ -109,12 +117,12 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rr := rt.routes[normalize(r.Host)]
 	rt.mu.RUnlock()
 	if rr == nil {
-		rt.seen.flag("", visitor(r.RemoteAddr), false)
+		rt.seen.flag("", visitor(r.RemoteAddr), notFound)
 		http.Error(w, offMsg, http.StatusNotFound)
 		return
 	}
 	if isLogin(r, rr.logins) && !rt.logins.allow(r.RemoteAddr) {
-		rt.seen.flag(normalize(r.Host), visitor(r.RemoteAddr), true)
+		rt.seen.flag(normalize(r.Host), visitor(r.RemoteAddr), blocked)
 		http.Error(w, "Too many sign-in attempts from your network. Wait a minute and try again", http.StatusTooManyRequests)
 		return
 	}

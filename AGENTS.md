@@ -45,5 +45,5 @@ server repo's TESTING.md.
 - frpc runs as a pinned subprocess; don't embed frp's Go packages.
 - Pass `context.Context` to all I/O; every goroutine and the frpc process must shut down cleanly.
 - Wrap errors with `%w`; log with `log/slog`; never log bodies, tokens or keys.
-- Ask before adding dependencies beyond: frp (binary), `pires/go-proxyproto`, `caddyserver/certmagic`, `libdns/libdns`, `docker/docker/client`, `golang.org/x/time/rate`, `go.yaml.in/yaml/v3`. They must be permissively licensed (Apache-2.0 compatible).
+- Ask before adding dependencies beyond: frp (binary), `pires/go-proxyproto`, `caddyserver/certmagic`, `libdns/libdns`, `docker/docker/client`, `golang.org/x/time/rate`, `go.yaml.in/yaml/v3`, `go.etcd.io/bbolt`. They must be permissively licensed (Apache-2.0 compatible).
 - Tests are required for Host routing, PROXY v2 parsing, toggle-off and guardrails.

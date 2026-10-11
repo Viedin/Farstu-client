@@ -358,15 +358,25 @@ func (u *UI) mux() http.Handler {
 		u.mu.Unlock()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(status)
+		today, signIns := u.today(u.router.Activity())
 		pages.ExecuteTemplate(w, "apps", struct {
 			Apps, Others                       []row
 			Problem, Error, Supported, Account string
-			Incidents                          []incidentRow
+			Today                              string
+			SignIns                            bool
 			Plan, Notice                       string
-		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account, u.incidents(), plan, notice})
+		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account, today, signIns, plan, notice})
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusOK, "")
+	})
+	mux.HandleFunc("GET /activity", func(w http.ResponseWriter, r *http.Request) {
+		all := u.router.Activity()
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		pages.ExecuteTemplate(w, "activity", struct {
+			Visitors []visitorRow
+			Days     []dayRow
+		}{u.visitors(all), days(all)})
 	})
 	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
@@ -413,18 +423,146 @@ func (u *UI) mux() http.Handler {
 	return mux
 }
 
-type incidentRow struct {
-	Name, Visitor, Ago string // Name "" for names not turned on
-	SignIn             bool
-	Count              int
+// tally is activity added up.
+type tally struct{ failed, blocked, notFound, unknown int }
+
+func (t *tally) add(a proxy.Activity) {
+	t.failed += a.Failed
+	t.blocked += a.Blocked
+	if a.Host == "" {
+		t.unknown += a.NotFound
+	} else {
+		t.notFound += a.NotFound
+	}
 }
 
-// incidents are the router's newest 20, by app name.
-func (u *UI) incidents() []incidentRow {
-	all := u.router.Incidents()
-	var rows []incidentRow
-	for _, in := range all[:min(len(all), 20)] {
-		rows = append(rows, incidentRow{strings.TrimSuffix(in.Host, "."+u.zone), in.Visitor, ago(u.now().Sub(in.Last)), in.SignIn, in.Count})
+func (t tally) signIns() int { return t.failed + t.blocked }
+func (t tally) total() int   { return t.signIns() + t.notFound + t.unknown }
+
+func (t tally) String() string {
+	var s []string
+	if t.failed > 0 {
+		s = append(s, plural(t.failed, "failed sign-in"))
+	}
+	if t.blocked > 0 {
+		s = append(s, plural(t.blocked, "sign-in attempt")+" blocked")
+	}
+	if t.notFound > 0 {
+		s = append(s, plural(t.notFound, "request")+" for pages that don't exist")
+	}
+	if t.unknown > 0 {
+		s = append(s, plural(t.unknown, "request")+" for names that aren't turned on")
+	}
+	return strings.Join(s, ", ")
+}
+
+func plural(n int, s string) string {
+	if n == 1 {
+		return "1 " + s
+	}
+	return fmt.Sprintf("%d %ss", n, s)
+}
+
+// today sums up today's activity for the apps page; empty if nothing needs
+// seeing. signIns: someone failed to sign in.
+func (u *UI) today(all []proxy.Activity) (msg string, signIns bool) {
+	date := u.now().Format(time.DateOnly)
+	var t tally
+	scanning := map[string]bool{} // by visitor: one scanning two apps is one
+	for _, a := range all {
+		if a.Day.Format(time.DateOnly) == date {
+			t.add(a)
+			if a.NotFound >= proxy.ScanMin {
+				scanning[a.Visitor] = true
+			}
+		}
+	}
+	var s []string
+	if n := t.signIns(); n > 0 {
+		s = append(s, plural(n, "sign-in")+" failed or blocked")
+	}
+	if len(scanning) > 0 {
+		s = append(s, plural(len(scanning), "visitor")+" scanning")
+	}
+	if len(s) == 0 {
+		return "", false
+	}
+	return "Today: " + strings.Join(s, ", "), t.signIns() > 0
+}
+
+// visitorRow is what one visitor did at one app over the last 30 days.
+type visitorRow struct {
+	Name, Visitor, What, Ago string // Name "" for names not turned on
+	Days                     int
+	SignIn                   bool
+}
+
+// visitors are the 50 that tried to sign in or scanned, sign-ins first.
+// Summed over 30 days, so guessing or scanning slowly adds up too.
+func (u *UI) visitors(all []proxy.Activity) []visitorRow {
+	type key struct{ host, visitor string }
+	type sum struct {
+		tally
+		days int
+		last time.Time
+	}
+	by := map[key]*sum{}
+	for _, a := range all {
+		k := key{a.Host, a.Visitor}
+		if by[k] == nil {
+			by[k] = &sum{last: a.Last} // all is newest first
+		}
+		by[k].add(a)
+		by[k].days++
+	}
+	keys := slices.Collect(maps.Keys(by))
+	slices.SortFunc(keys, func(a, b key) int {
+		x, y := by[a], by[b]
+		if c := y.signIns() - x.signIns(); c != 0 {
+			return c
+		}
+		if c := y.total() - x.total(); c != 0 {
+			return c
+		}
+		return y.last.Compare(x.last)
+	})
+	var rows []visitorRow
+	for _, k := range keys {
+		s := by[k]
+		if s.signIns() == 0 && s.notFound+s.unknown < proxy.ScanMin || len(rows) == 50 {
+			continue
+		}
+		rows = append(rows, visitorRow{strings.TrimSuffix(k.host, "."+u.zone), k.visitor, s.String(), ago(u.now().Sub(s.last)), s.days, s.signIns() > 0})
+	}
+	return rows
+}
+
+// dayRow is one day's activity, Width its share of the busiest day.
+type dayRow struct {
+	Date, What string
+	Width      int
+	SignIn     bool
+}
+
+// days are the days with activity, newest first.
+func days(all []proxy.Activity) []dayRow {
+	by := map[string]*tally{}
+	for _, a := range all {
+		d := a.Day.Format(time.DateOnly)
+		if by[d] == nil {
+			by[d] = &tally{}
+		}
+		by[d].add(a)
+	}
+	busiest := 1 // no dividing by zero
+	for _, t := range by {
+		busiest = max(busiest, t.total())
+	}
+	var rows []dayRow
+	for _, d := range slices.Backward(slices.Sorted(maps.Keys(by))) {
+		t := by[d]
+		day, _ := time.Parse(time.DateOnly, d)
+		rows = append(rows, dayRow{day.Format("Mon 2 Jan"), t.String(), max(t.total()*100/busiest, 1), t.signIns() > 0})
 	}
 	return rows
 }
@@ -435,8 +573,10 @@ func ago(d time.Duration) string {
 		return "just now"
 	case d < time.Hour:
 		return fmt.Sprintf("%d min ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d h ago", int(d.Hours()))
 	}
-	return fmt.Sprintf("%d h ago", int(d.Hours()))
+	return plural(int(d.Hours()/24), "day") + " ago"
 }
 
 func (u *UI) handler() http.Handler { return guard(u.mux()) }

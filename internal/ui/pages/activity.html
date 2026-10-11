@@ -1,0 +1,12 @@
+{{define "activity"}}{{template "head"}}
+<p><a href="/">← Apps</a></p>
+<p class="muted">Sign-ins and requests for pages that don't exist, last 30 days. Every address on the internet gets scanned; visitors only reach apps you turned on.</p>
+{{with .Visitors}}<h2>Visitors</h2>
+<div class="card">{{range .}}<p class="act{{if .SignIn}} bad{{end}}">{{with .Name}}<span class="name">{{.}}</span>: {{end}}{{.What}}{{if gt .Days 1}} over {{.Days}} days{{end}} from {{.Visitor}}, <span class="muted">{{.Ago}}</span></p>
+{{end}}</div>
+<p class="muted">Failed sign-ins are a wrong password, or someone guessing: make sure that app's passwords are strong. Scans look for known weak spots and usually move on.</p>{{end}}
+{{with .Days}}<h2>Per day</h2>
+<div class="card">{{range .}}<p class="act">{{.Date}}: <span{{if .SignIn}} class="bad"{{end}}>{{.What}}</span></p>
+<div class="bar{{if .SignIn}} sign{{end}}" style="width:{{.Width}}%"></div>
+{{end}}</div>{{else}}<p class="card">Nothing in the last 30 days.</p>{{end}}
+{{end}}

@@ -58,10 +58,10 @@ func main() {
 			}
 			return
 		}
-		// Forget the device and which apps were on: whoever connects this
-		// server next starts with every app off.
+		// Forget the device, which apps were on and their activity: whoever
+		// connects this server next starts with every app off.
 		slog.Warn("this server was disconnected from its Farstu account; connect it again on the local page")
-		for _, f := range []string{"device.json", "apps.json"} {
+		for _, f := range []string{"device.json", "apps.json", "farstu.db"} {
 			if err := os.Remove(filepath.Join(*dataDir, f)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				slog.Error("farstu client stopped", "err", err)
 				os.Exit(1)
@@ -110,6 +110,7 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 		return err
 	}
 	router := proxy.NewRouter()
+	spawn(func() error { router.Keep(ctx, filepath.Join(dataDir, "farstu.db")); return nil })
 	toggles := ui.Load(filepath.Join(dataDir, "apps.json"), router, dev.Subdomain+"."+dev.Domain)
 	toggles.Logins = map[string][]recipes.Login{}
 	toggles.Account = server + "/account"

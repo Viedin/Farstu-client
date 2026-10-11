@@ -11,12 +11,8 @@
 <p class="muted">Farstu doesn't support these, so it can't check that they ask every visitor for a password, or slow down password guessing. Turn one on only if you know it's safe on the internet.</p>
 {{range .}}{{template "app" .}}
 {{end}}</details>{{end}}
-{{with .Incidents}}<h2>Last 24 hours</h2>
-<div class="card">{{range .}}<p class="act">{{if .SignIn}}<span class="bad"><span class="name">{{.Name}}</span>: {{.Count}} sign-in attempts blocked</span>
-{{else if .Name}}<span class="name">{{.Name}}</span>: {{.Count}} requests for pages that don't exist
-{{else}}{{.Count}} requests for names that aren't turned on{{end}} from {{.Visitor}}, <span class="muted">{{.Ago}}</span></p>
-{{end}}</div>
-<p class="muted">Every address on the internet gets scanned; visitors only reach apps you turned on. Blocked sign-ins mean someone is guessing passwords: make sure that app's passwords are strong.</p>{{end}}
+{{with .Today}}<a class="card{{if $.SignIns}} error{{end}}" href="/activity">{{.}} →</a>{{end}}
+<p class="muted foot"><a href="/activity">Activity</a>: sign-ins and scans, last 30 days</p>
 {{with .Account}}<p class="muted foot"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
 <script>
 // An app just turned on reconnects the tunnel, and right after connecting

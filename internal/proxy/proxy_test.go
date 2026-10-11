@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,11 +12,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pires/go-proxyproto"
+	"go.etcd.io/bbolt"
 
 	"github.com/viedin/farstu-client/internal/recipes"
 )
@@ -284,22 +288,29 @@ func TestLoginLimit(t *testing.T) {
 	}
 }
 
-// Guardrail: the local page shows password guessing always, scanning only
-// once it's more than a phone missing a few thumbnails, and forgets both
-// after a day.
-func TestIncidents(t *testing.T) {
+// Guardrail: wrong passwords, sign-ins the limit blocks and pages not found
+// are counted per visitor and day, kept for 30 days, and survive a restart.
+func TestActivity(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/missing" {
+		switch r.URL.Path {
+		case "/missing":
+			http.NotFound(w, r)
+		case "/login":
+			http.Error(w, "wrong password", http.StatusUnauthorized)
+		case "/moved":
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(up.Close)
 	now := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
-	rt := NewRouter()
-	rt.seen.now = func() time.Time { return now }
 	const app = "immich.u.farstu.test"
-	rt.Enable(app, up.Listener.Addr().String(), []recipes.Login{{Path: "/login", Method: "POST"}})
-	do := func(host, remote, method, path string, n int) {
+	router := func() *Router {
+		rt := NewRouter()
+		rt.seen.now = func() time.Time { return now }
+		rt.Enable(app, up.Listener.Addr().String(), []recipes.Login{{Path: "/login", Method: "POST"}, {Path: "/moved", Method: "POST"}})
+		return rt
+	}
+	do := func(rt *Router, host, remote, method, path string, n int) {
 		for range n {
 			req := httptest.NewRequest(method, path, nil)
 			req.Host = host
@@ -307,34 +318,121 @@ func TestIncidents(t *testing.T) {
 			rt.ServeHTTP(httptest.NewRecorder(), req)
 		}
 	}
-	shown := func() string {
+	shown := func(rt *Router) string {
 		var s []string
-		for _, in := range rt.Incidents() {
-			s = append(s, fmt.Sprint(in.Host, " ", in.Visitor, " ", in.SignIn, " ", in.Count))
+		for _, a := range rt.Activity() {
+			s = append(s, fmt.Sprint(a.Day.Format(time.DateOnly), " ", a.Host, " ", a.Visitor, " ", a.Failed, " ", a.Blocked, " ", a.NotFound))
 		}
 		return strings.Join(s, ", ")
 	}
-
-	do(app, "203.0.113.7:1", "POST", "/login", loginBurst+5) // 5 blocked
-	do(app, "198.51.100.1:1", "GET", "/missing", scanMin-1)  // a phone missing thumbnails
-	do(app, "198.51.100.1:1", "GET", "/", 50)
-	now = now.Add(time.Second)
-	do(app, "198.51.100.2:1", "GET", "/missing", scanMin) // a scanner
-	now = now.Add(time.Second)
-	do("admin.u.farstu.test", "192.0.2.1:1", "GET", "/", scanMin)
-	if got, want := shown(), " 192.0.2.1 false 20, "+app+" 198.51.100.2 false 20, "+app+" 203.0.113.7 true 5"; got != want {
-		t.Errorf("incidents:\n%s, want\n%s", got, want)
+	path := filepath.Join(t.TempDir(), "farstu.db")
+	keep := func(rt *Router) { // load, save once, close
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rt.Keep(ctx, path)
 	}
 
-	// Quiet for longer than the gap: the next attempt is a new incident.
-	now = now.Add(incidentGap + time.Minute)
-	do(app, "203.0.113.7:1", "POST", "/login", 1)
-	if in := rt.Incidents(); len(in) != 4 || in[0].Count != 1 || !in[0].SignIn {
-		t.Errorf("after the gap: %+v", in)
+	rt := router()
+	do(rt, app, "203.0.113.7:1", "POST", "/login", loginBurst+5) // 10 wrong, 5 blocked
+	do(rt, app, "203.0.113.7:1", "GET", "/missing", 1)
+	do(rt, app, "203.0.113.7:1", "GET", "/", 5) // ordinary visits aren't kept
+	now = now.Add(time.Second)
+	do(rt, app, "198.51.100.9:1", "POST", "/moved", 1) // a moved sign-in page, not a wrong password
+	now = now.Add(time.Second)
+	do(rt, "admin.u.farstu.test", "192.0.2.1:1", "GET", "/", 3)
+	now = now.Add(24 * time.Hour)
+	do(rt, app, "203.0.113.8:1", "POST", "/login", 1)
+	want := "2026-10-11 " + app + " 203.0.113.8 1 0 0, 2026-10-10  192.0.2.1 0 0 3, 2026-10-10 " + app + " 198.51.100.9 0 0 1, 2026-10-10 " + app + " 203.0.113.7 10 5 1"
+	if got := shown(rt); got != want {
+		t.Errorf("activity:\n%s, want\n%s", got, want)
 	}
 
-	now = now.Add(window)
-	if in := rt.Incidents(); len(in) != 0 {
-		t.Errorf("after a day: %+v", in)
+	// Saved and loaded again by the next start, corrupt and empty entries
+	// dropped.
+	keep(rt)
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Update(func(tx *bbolt.Tx) error {
+		empty, _ := json.Marshal(Activity{Day: now, Visitor: "nothing", Last: now})
+		return errors.Join(tx.Bucket(bucket).Put([]byte("x"), []byte("{")), tx.Bucket(bucket).Put([]byte("2026-10-11||nothing"), empty))
+	})
+	db.Close()
+	rt = router()
+	keep(rt)
+	if got := shown(rt); got != want {
+		t.Errorf("after a restart:\n%s, want\n%s", got, want)
+	}
+
+	// 30 days on, the first day is gone, also from the database.
+	now = now.Add(window - time.Hour)
+	keep(router())
+	now = now.Add(-window + time.Hour)
+	// Flagged before loading: added to what was saved.
+	rt = router()
+	do(rt, app, "203.0.113.8:1", "POST", "/login", 1)
+	keep(rt)
+	if got, want := shown(rt), "2026-10-11 "+app+" 203.0.113.8 2 0 0"; got != want {
+		t.Errorf("30 days on:\n%s, want\n%s", got, want)
+	}
+	db, err = bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.View(func(tx *bbolt.Tx) error {
+		if n := tx.Bucket(bucket).Stats().KeyN; n != 1 {
+			t.Errorf("%d entries saved, want 1", n)
+		}
+		return nil
+	})
+}
+
+// A broken database is set aside for a new one; it never stops the client.
+func TestKeepBrokenDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "farstu.db")
+	if err := os.WriteFile(path, []byte(strings.Repeat("not bbolt ", 1000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRouter()
+	rt.seen.flag("", "192.0.2.1", notFound)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rt.Keep(ctx, path)
+	if _, err := os.Stat(path + ".broken"); err != nil {
+		t.Errorf("not set aside: %v", err)
+	}
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.View(func(tx *bbolt.Tx) error {
+		if b := tx.Bucket(bucket); b == nil || b.Stats().KeyN != 1 {
+			t.Errorf("not saved to a new database")
+		}
+		return nil
+	})
+}
+
+// Full: scans go first, the oldest first; sign-ins last.
+func TestEvict(t *testing.T) {
+	s := newActivity()
+	t0 := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return t0 }
+	for _, a := range []Activity{
+		{Visitor: "guess", Failed: 1, Last: t0},
+		{Visitor: "old scan", NotFound: 1, Last: t0.Add(time.Minute)},
+		{Visitor: "new scan", NotFound: 1, Last: t0.Add(time.Hour)},
+	} {
+		s.by[a.key()] = &a
+	}
+	for _, want := range []string{"old scan", "new scan", "guess"} {
+		before := s.all()
+		s.evict()
+		if len(s.by) != len(before)-1 || slices.ContainsFunc(s.all(), func(a Activity) bool { return a.Visitor == want }) {
+			t.Fatalf("evicted %+v, want %s gone", s.all(), want)
+		}
 	}
 }

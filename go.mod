@@ -6,6 +6,7 @@ require (
 	github.com/caddyserver/certmagic v0.25.6
 	github.com/libdns/libdns v1.1.1
 	github.com/pires/go-proxyproto v0.15.0
+	go.etcd.io/bbolt v1.5.0
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/time v0.16.0
 )
