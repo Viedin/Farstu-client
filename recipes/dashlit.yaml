@@ -1,0 +1,12 @@
+app: dashlit
+match: { images: ["ghcr.io/codewec/dashlit"] }
+upstream_port: 8080
+# The first account to register becomes admin, and nothing public says
+# whether it exists yet: wait for password sign-ups to be off. Sign-ups
+# through OIDC come from the user's own identity provider.
+setup_done:
+  path: /api/auth/config
+  unset: [passwordRegistrationEnabled]
+  message: DashLit lets anyone sign up, and its first account becomes admin. Create your account from your home network, then set DISABLE_PASSWORD_REGISTRATION=true
+login:
+  - { method: POST, path: /api/auth/login }

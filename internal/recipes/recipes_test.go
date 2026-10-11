@@ -43,6 +43,8 @@ func TestRecipes(t *testing.T) {
 		"deluan/navidrome:0.64.2":                            "navidrome",
 		"corentinth/it-tools:latest":                         "it-tools",
 		"ghcr.io/gchq/cyberchef:11.5.0":                      "cyberchef",
+		"donetick/donetick:v0.1.60":                          "donetick",
+		"ghcr.io/codewec/dashlit:v1.0.0":                     "dashlit",
 		"localhost:5000/nextcloud:29":                        "",
 		"ghcr.io/immich-app/immich-machine-learning:release": "",
 		"sha256:0123abcd":                                    "",

@@ -1,0 +1,11 @@
+app: donetick
+match: { images: ["donetick/donetick"] }
+upstream_port: 2021
+# No first-visitor admin: each account makes its own circle. This just checks
+# Donetick answers. Open sign-ups (is_user_creation_disabled off by default)
+# are the user's call.
+setup_done: { path: /api/v1/resource, field: identity_provider }
+login:
+  - { method: POST, path: /api/v1/auth/login }
+  - { method: POST, path: /api/v1/auth/login/legacy }
+  - { method: POST, path: /api/v1/auth/mfa/verify }
