@@ -82,3 +82,35 @@ func TestMeUnknownDevice(t *testing.T) {
 		t.Fatalf("unreachable: %v", err)
 	}
 }
+
+// The device token never follows a redirect, nor goes out over plain HTTP.
+func TestTokenStaysOnTLS(t *testing.T) {
+	leaked := false
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("Authorization") != ""
+	}))
+	defer elsewhere.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusFound)
+	}))
+	defer srv.Close()
+	if _, err := Me(context.Background(), srv.URL, "tok"); err == nil || leaked {
+		t.Fatalf("redirect followed: %v, token sent on %v", err, leaked)
+	}
+
+	for url, ok := range map[string]bool{
+		"https://api.farstu.app:8443": true,
+		"http://localhost:8090":       true,
+		"http://127.0.0.1:8090":       true,
+		"http://[::1]:8090":           true,
+		"http://api.farstu.app":       false,
+		"http://192.168.1.5:8090":     false,
+		"ftp://api.farstu.app":        false,
+		"api.farstu.app":              false,
+		"https://":                    false,
+	} {
+		if err := CheckServerURL(url); (err == nil) != ok {
+			t.Errorf("%s: %v, want ok %v", url, err, ok)
+		}
+	}
+}

@@ -12,13 +12,34 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"time"
 
 	"github.com/viedin/farstu-client/api"
 )
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+// No redirects: Go follows one from https to http on the same host, with
+// the device token.
+var httpClient = &http.Client{
+	Timeout:       30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// CheckServerURL refuses a Farstu Server URL the device token would travel
+// to unencrypted: anything but https, except on this machine for testing.
+func CheckServerURL(server string) error {
+	u, err := url.Parse(server)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("-server %q is not a URL like https://api.farstu.app:8443", server)
+	}
+	ip, _ := netip.ParseAddr(u.Hostname())
+	if u.Scheme != "https" && !(u.Scheme == "http" && (u.Hostname() == "localhost" || ip.IsLoopback())) {
+		return fmt.Errorf("-server %q must start with https://: the device token only goes over TLS", server)
+	}
+	return nil
+}
 
 // ErrUnknownDevice means Farstu Server no longer knows this device: it was
 // disconnected on the account page, replaced by another server, or its

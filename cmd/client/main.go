@@ -77,6 +77,9 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	if server == "" {
 		return errors.New("-server is required")
 	}
+	if err := control.CheckServerURL(server); err != nil {
+		return err
+	}
 	uiLn, err := net.Listen("tcp", uiAddr)
 	if err != nil {
 		return fmt.Errorf("listen for local page: %w", err)
