@@ -61,6 +61,11 @@ func (rt *Router) Enable(host, upstream string, logins []recipes.Login) {
 			// X-Real-Ip; the visitor's own would let them pose as anyone.
 			pr.SetXForwarded()
 			pr.Out.Header.Set("X-Real-Ip", pr.Out.Header.Get("X-Forwarded-For"))
+			for k := range pr.Out.Header {
+				if isIdentityHeader(k) {
+					delete(pr.Out.Header, k) // not Del: it'd canonicalize k, missing a raw "Remote_User"
+				}
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// Wrong passwords come back as 401, 403 or 400 (Vaultwarden); a
@@ -96,6 +101,22 @@ func (rt *Router) Enable(host, upstream string, logins []recipes.Login) {
 	if old != nil {
 		old.stop() // else its open streams would outlive a later Disable
 	}
+}
+
+// identityHeaders are prefixes of the headers apps behind a sign-in proxy
+// (Authelia, authentik, oauth2-proxy, Tailscale, Cloudflare Access) take as
+// the signed-in user when they come from a trusted address. Every visitor
+// comes from ours, so a visitor's own would sign them in as anyone.
+var identityHeaders = []string{
+	"remote-", "x-remote-", "x-webauth-", "x-auth-request-", "x-authentik-", "tailscale-", "cf-access-",
+	"x-forwarded-user", "x-forwarded-email", "x-forwarded-preferred-username", "x-forwarded-groups", "x-forwarded-access-token",
+}
+
+// isIdentityHeader matches "_" as "-": Python servers read Remote_User as
+// Remote-User.
+func isIdentityHeader(name string) bool {
+	name = strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	return slices.ContainsFunc(identityHeaders, func(p string) bool { return strings.HasPrefix(name, p) })
 }
 
 // Disable stops routing new requests to host and cuts its in-flight

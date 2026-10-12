@@ -270,6 +270,11 @@ func TestPage(t *testing.T) {
 	if _, body := get("localhost:7080", "/"); !strings.Contains(body, "Contacting Farstu") {
 		t.Errorf("before a code: %s", body)
 	}
+	framing := httptest.NewRecorder()
+	guard(&p).ServeHTTP(framing, httptest.NewRequest("GET", "http://localhost:7080/", nil))
+	if framing.Header().Get("X-Frame-Options") != "DENY" {
+		t.Errorf("page can be framed: %v", framing.Header())
+	}
 	if _, body := get("localhost:7080", "/"); strings.Contains(body, "disconnected") {
 		t.Errorf("disconnected on first run: %s", body)
 	}

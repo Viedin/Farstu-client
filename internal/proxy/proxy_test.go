@@ -69,6 +69,35 @@ func TestRouter(t *testing.T) {
 	}
 }
 
+// A visitor can't sign in to an app that trusts a sign-in proxy's headers.
+func TestIdentityHeadersDropped(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for k := range r.Header {
+			fmt.Fprintln(w, k)
+		}
+	}))
+	defer up.Close()
+	rt := NewRouter()
+	rt.Enable("app.u.farstu.test", up.Listener.Addr().String(), nil)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "app.u.farstu.test"
+	for _, h := range []string{"Remote-User", "Remote_User", "X-Webauth-User", "X-Forwarded-User", "X-Forwarded-Email", "X-Authentik-Username", "Tailscale-User-Login", "Cf-Access-Authenticated-User-Email", "X-Auth-Request-Email"} {
+		req.Header[h] = []string{"admin"} // as sent, not canonicalized
+	}
+	req.Header.Set("Authorization", "Bearer kept")
+	rec := httptest.NewRecorder()
+	rt.ServeHTTP(rec, req)
+	got := strings.Fields(rec.Body.String())
+	for _, h := range got {
+		if isIdentityHeader(h) {
+			t.Errorf("forwarded %s", h)
+		}
+	}
+	if !slices.Contains(got, "Authorization") || !slices.Contains(got, "X-Forwarded-For") {
+		t.Errorf("dropped too much: %v", got)
+	}
+}
+
 func TestServeProxyV2(t *testing.T) {
 	donor := httptest.NewTLSServer(nil) // borrow its self-signed cert
 	certs := donor.TLS.Certificates

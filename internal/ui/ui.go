@@ -583,10 +583,14 @@ func (u *UI) handler() http.Handler { return guard(u.mux()) }
 
 // guard: a button here exposes an app to the internet, and the connect page
 // links this server to an account. Refuse requests from other sites, and
-// from DNS-rebound names.
+// from DNS-rebound names, and framing: a form posted inside a frame counts
+// as same-origin, so a site framing this page could trick a click on a
+// switch.
 func guard(h http.Handler) http.Handler {
 	cop := http.NewCrossOriginProtection().Handler(h)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 		if !homeNetwork(r.RemoteAddr, onLink()) {
 			http.Error(w, "Open this page from your home network", http.StatusForbidden)
 			return
