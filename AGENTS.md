@@ -24,6 +24,11 @@ go vet ./...
 docker build -t farstu-client .
 ```
 
+Release: push a tag `vX.Y.Z` to GitHub (origin). The workflow publishes
+`ghcr.io/viedin/farstu-client:vX.Y.Z` and `:latest` (amd64, arm64), which the
+README quick start and the docs pull. An `api/` change then needs
+`go get github.com/viedin/farstu-client@vX.Y.Z` in the server repo.
+
 Manual end-to-end testing (VPS, Nextcloud test rig) is described in the
 server repo's TESTING.md.
 
