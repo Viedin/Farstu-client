@@ -16,13 +16,13 @@ part of this repository; `api/` is the full protocol between the two.
 
 ## Quick start
 
-On the server that runs your apps (Linux with Docker), clone this repository
-and save this as `compose.yaml` next to this README:
+On the server that runs your apps (Linux with Docker), save this as
+`compose.yaml`:
 
 ```yaml
 services:
   farstu-client:
-    build: .
+    image: ghcr.io/viedin/farstu-client:latest
     network_mode: host # reaches your apps; the local page is on :7080
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # finds your apps
@@ -34,7 +34,7 @@ volumes:
 ```
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 ```
 
 1. Open `http://<your server's IP>:7080` from your home network.
