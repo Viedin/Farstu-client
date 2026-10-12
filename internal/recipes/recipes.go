@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -78,6 +79,10 @@ func Load(fsys fs.FS) ([]Recipe, error) {
 		for _, l := range r.Login {
 			if err == nil && (l.Path == "" || l.Method == "") {
 				err = errors.New("each login needs path and method")
+			}
+			// The proxy matches cleaned request paths ("/login/" as "/login").
+			if err == nil && path.Clean("/"+l.Path) != l.Path {
+				err = fmt.Errorf("login path %s never matches; write it as %s", l.Path, path.Clean("/"+l.Path))
 			}
 		}
 		if err != nil {

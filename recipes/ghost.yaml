@@ -3,4 +3,4 @@ match: { images: ["ghost"] }
 upstream_port: 2368
 setup_done: { path: /ghost/api/admin/authentication/setup/, field: setup.0.status } # false until the owner exists
 login:
-  - { method: POST, path: /ghost/api/admin/session/ }
+  - { method: POST, path: /ghost/api/admin/session }

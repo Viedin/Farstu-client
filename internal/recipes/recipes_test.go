@@ -71,6 +71,8 @@ func TestLoadRefuses(t *testing.T) {
 		"200 without a field":    `{app: a, match: {images: [a]}, upstream_port: 80, setup_done: {path: /x}}`,
 		"login without a method": `{app: a, match: {images: [a]}, upstream_port: 80, no_login: true, login: [{path: /x}]}`,
 		"old single image":       `{app: a, match: {image: a}, upstream_port: 80, no_login: true}`,
+		"login with a slash":     `{app: a, match: {images: [a]}, upstream_port: 80, no_login: true, login: [{method: POST, path: /x/}]}`,
+		"relative login":         `{app: a, match: {images: [a]}, upstream_port: 80, no_login: true, login: [{method: POST, path: x}]}`,
 	} {
 		if _, err := Load(fstest.MapFS{"a.yaml": {Data: []byte(y)}}); err == nil {
 			t.Errorf("%s: loaded", name)
