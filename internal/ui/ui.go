@@ -43,19 +43,24 @@ type App struct {
 // starts off.
 const forgetAfter = 24 * time.Hour
 
+// How long apps are routed to the address they were last seen at while
+// Docker can't be asked (see SetApps).
+const blindFor = 30 * time.Second
+
 type UI struct {
 	path   string // JSON list of the names of apps that are on
 	router *proxy.Router
 	zone   string // e.g. "calm-otter-k3x9qf2m.farstu.dev"
 	now    func() time.Time
 
-	mu        sync.Mutex
-	on        []string // names of apps that are on, in the order they were turned on
-	apps      []App    // running now, by name
-	problem   string
-	goneSince map[string]time.Time // apps that are on but not running
-	plan      api.Me               // zero until the server first answers: no app limit
-	notice    string               // apps the plan turned off
+	mu         sync.Mutex
+	on         []string // names of apps that are on, in the order they were turned on
+	apps       []App    // running now, by name
+	problem    string
+	blindSince time.Time            // when discovery started failing; zero while it works
+	goneSince  map[string]time.Time // apps that are on but not running
+	plan       api.Me               // zero until the server first answers: no app limit
+	notice     string               // apps the plan turned off
 	// ponytail: goneSince lives in memory, so a client restart restarts the
 	// clock; persist it if restarts during an uninstall turn out to matter.
 
@@ -114,10 +119,24 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if err != nil {
-		u.problem = err.Error() // keep routing what we last saw
+		u.problem = err.Error()
+		if u.blindSince.IsZero() {
+			u.blindSince = u.now()
+		}
+		// Through a Docker hiccup, keep routing what we last saw. Not for
+		// long: Docker hands a container's IP to the next one, which may be
+		// another app, or one without an admin account yet. The apps stay
+		// on, and are routed again once seen.
+		if u.now().Sub(u.blindSince) >= blindFor && len(u.apps) > 0 {
+			slog.Warn("can't see apps for a while, stopped routing them", "err", err)
+			for _, a := range u.apps {
+				u.router.Disable(a.Host)
+			}
+			u.apps = nil
+		}
 		return
 	}
-	u.problem = ""
+	u.problem, u.blindSince = "", time.Time{}
 	apps := []App{}
 	for _, n := range slices.Sorted(maps.Keys(running)) {
 		r := running[n]

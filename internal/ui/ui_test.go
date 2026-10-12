@@ -108,6 +108,8 @@ func TestAppComesAndGoes(t *testing.T) {
 	}
 
 	u := Load(path, rt, "u.farstu.test")
+	clock := time.Now()
+	u.now = func() time.Time { return clock }
 	if get() != 404 {
 		t.Fatal("routed before discovery")
 	}
@@ -129,10 +131,30 @@ func TestAppComesAndGoes(t *testing.T) {
 		t.Fatal("not routed to the new address")
 	}
 
-	// Docker trouble keeps the routes and says why.
-	u.SetApps(nil, errors.New("Can't see your apps: Docker is not answering"))
+	// Docker trouble keeps the routes for a while and says why.
+	blind := errors.New("Can't see your apps: Docker is not answering")
+	u.SetApps(nil, blind)
+	clock = clock.Add(blindFor - time.Second)
+	u.SetApps(nil, blind)
 	if get() != 202 || !strings.Contains(page(u.handler()), "Docker is not answering") {
 		t.Error("discovery error dropped routes or was not shown")
+	}
+	// Longer, and the address may be another container's by now: not
+	// routed, but still on once seen again.
+	clock = clock.Add(time.Second)
+	u.SetApps(nil, blind)
+	if get() != 404 || !strings.Contains(page(u.handler()), `aria-checked="true" aria-label="immich"`) {
+		t.Fatal("still routed long after discovery failed, or turned off")
+	}
+	u.SetApps(map[string]discover.App{"immich": {Upstream: moved.Listener.Addr().String()}}, nil)
+	if get() != 202 {
+		t.Fatal("not routed again once seen")
+	}
+	// A new failure gets the full grace again.
+	clock = clock.Add(time.Hour)
+	u.SetApps(nil, blind)
+	if get() != 202 {
+		t.Fatal("grace not reset after discovery worked")
 	}
 
 	// Turned off while gone: stays off when it comes back.
