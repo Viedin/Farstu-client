@@ -8,9 +8,16 @@
 {{end}}
 {{with .Others}}<details>
 <summary>Other containers ({{len .}})</summary>
-<p class="muted">Farstu doesn't support these, so it can't check that they ask every visitor for a password, or slow down password guessing. Turn one on only if you know it's safe on the internet.</p>
+<p class="muted">Farstu has no recipe for these, so it can't check what makes an app safe on the internet. Anyone who finds the address can try it, and nothing checks that:</p>
+<ul class="muted">
+<li>it asks every visitor to sign in. Database admin pages, dashboards and many small tools have no login, or skip it for local addresses, and through Farstu every visitor looks local.</li>
+<li>a fresh install doesn't make its first visitor the admin.</li>
+<li>password guessing is slowed down.</li>
+</ul>
+<button class="button" type="button" id="accept">I understand the risks, show them</button>
+<div id="others" hidden>
 {{range .}}{{template "app" .}}
-{{end}}</details>{{end}}
+{{end}}</div></details>{{end}}
 {{with .Today}}<a class="card{{if $.SignIns}} error{{end}}" href="/activity">{{.}} →</a>{{end}}
 <p class="muted foot"><a href="/activity">Activity</a>: sign-ins and scans, last 30 days</p>
 {{with .Account}}<p class="muted foot"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
@@ -28,6 +35,14 @@ const check = (el, until) => fetch("/apps/" + encodeURIComponent(el.dataset.app)
     if (Date.now() < until) return setTimeout(() => check(el, until), 3000)
     el.textContent = "Could not check this app"; el.className = "status bad"
   })
+// The other containers stay hidden until the warning above them is
+// accepted once in this browser.
+const accept = document.getElementById("accept")
+if (accept) {
+  const show = () => { accept.hidden = true; document.getElementById("others").hidden = false }
+  try { if (localStorage.getItem("acceptedUnsupported")) show() } catch {}
+  accept.onclick = () => { try { localStorage.setItem("acceptedUnsupported", "1") } catch {}; show() }
+}
 for (const el of document.querySelectorAll("[data-app]")) check(el, Date.now() + 60000)
 for (const b of document.querySelectorAll("[data-qr]")) b.onclick = () => {
   const q = b.closest("form").querySelector(".qr")
