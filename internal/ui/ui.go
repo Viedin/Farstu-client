@@ -395,7 +395,7 @@ func (u *UI) mux() http.Handler {
 		pages.ExecuteTemplate(w, "activity", struct {
 			Visitors []visitorRow
 			Days     []dayRow
-		}{u.visitors(all), days(all)})
+		}{u.visitors(all), u.days(all)})
 	})
 	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
@@ -556,32 +556,58 @@ func (u *UI) visitors(all []proxy.Activity) []visitorRow {
 	return rows
 }
 
-// dayRow is one day's activity, Width its share of the busiest day.
+// dayRow is one day's activity by visitor, Width its share of the busiest
+// day.
 type dayRow struct {
-	Date, What string
-	Width      int
-	SignIn     bool
+	Date     string
+	Width    int
+	SignIn   bool
+	Visitors []hitRow
 }
 
-// days are the days with activity, newest first.
-func days(all []proxy.Activity) []dayRow {
-	by := map[string]*tally{}
+// hitRow is what one visitor did at one app on one day.
+type hitRow struct {
+	Name, Visitor, What, Time string // Name "" for names not turned on
+	Asked                     string // the name asked for instead
+	SignIn                    bool
+}
+
+// days are the days with activity, newest first, each listing every
+// visitor, sign-ins first, then the busiest.
+func (u *UI) days(all []proxy.Activity) []dayRow {
+	by := map[string][]proxy.Activity{}
 	for _, a := range all {
 		d := a.Day.Format(time.DateOnly)
-		if by[d] == nil {
-			by[d] = &tally{}
+		by[d] = append(by[d], a)
+	}
+	sum := func(l []proxy.Activity) (t tally) {
+		for _, a := range l {
+			t.add(a)
 		}
-		by[d].add(a)
+		return t
 	}
 	busiest := 1 // no dividing by zero
-	for _, t := range by {
-		busiest = max(busiest, t.total())
+	for _, l := range by {
+		busiest = max(busiest, sum(l).total())
 	}
 	var rows []dayRow
 	for _, d := range slices.Backward(slices.Sorted(maps.Keys(by))) {
-		t := by[d]
+		l := by[d]
+		slices.SortStableFunc(l, func(a, b proxy.Activity) int { // stable: newest first among equals
+			if c := b.Failed + b.Blocked - a.Failed - a.Blocked; c != 0 {
+				return c
+			}
+			return b.Failed + b.Blocked + b.NotFound - a.Failed - a.Blocked - a.NotFound
+		})
+		t := sum(l)
 		day, _ := time.Parse(time.DateOnly, d)
-		rows = append(rows, dayRow{day.Format("Mon 2 Jan"), t.String(), max(t.total()*100/busiest, 1), t.signIns() > 0})
+		r := dayRow{day.Format("Mon 2 Jan"), max(t.total()*100/busiest, 1), t.signIns() > 0, nil}
+		for _, a := range l {
+			var v tally
+			v.add(a)
+			r.Visitors = append(r.Visitors, hitRow{strings.TrimSuffix(a.Host, "."+u.zone), a.Visitor, v.String(), a.Last.Format("15:04"), strings.TrimSuffix(a.Asked, "."+u.zone), v.signIns() > 0})
+		}
+		rows = append(rows, r)
 	}
 	return rows
 }

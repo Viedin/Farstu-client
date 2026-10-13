@@ -138,7 +138,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rr := rt.routes[normalize(r.Host)]
 	rt.mu.RUnlock()
 	if rr == nil {
-		rt.seen.flag("", visitor(r.RemoteAddr), notFound)
+		rt.seen.flagUnknown(normalize(r.Host), visitor(r.RemoteAddr))
 		http.Error(w, offMsg, http.StatusNotFound)
 		return
 	}

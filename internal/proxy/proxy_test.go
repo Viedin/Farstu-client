@@ -350,7 +350,7 @@ func TestActivity(t *testing.T) {
 	shown := func(rt *Router) string {
 		var s []string
 		for _, a := range rt.Activity() {
-			s = append(s, fmt.Sprint(a.Day.Format(time.DateOnly), " ", a.Host, " ", a.Visitor, " ", a.Failed, " ", a.Blocked, " ", a.NotFound))
+			s = append(s, fmt.Sprint(a.Day.Format(time.DateOnly), " ", a.Host, " ", a.Asked, " ", a.Visitor, " ", a.Failed, " ", a.Blocked, " ", a.NotFound))
 		}
 		return strings.Join(s, ", ")
 	}
@@ -371,7 +371,7 @@ func TestActivity(t *testing.T) {
 	do(rt, "admin.u.farstu.test", "192.0.2.1:1", "GET", "/", 3)
 	now = now.Add(24 * time.Hour)
 	do(rt, app, "203.0.113.8:1", "POST", "/login", 1)
-	want := "2026-10-11 " + app + " 203.0.113.8 1 0 0, 2026-10-10  192.0.2.1 0 0 3, 2026-10-10 " + app + " 198.51.100.9 0 0 1, 2026-10-10 " + app + " 203.0.113.7 10 5 1"
+	want := "2026-10-11 " + app + "  203.0.113.8 1 0 0, 2026-10-10  admin.u.farstu.test 192.0.2.1 0 0 3, 2026-10-10 " + app + "  198.51.100.9 0 0 1, 2026-10-10 " + app + "  203.0.113.7 10 5 1"
 	if got := shown(rt); got != want {
 		t.Errorf("activity:\n%s, want\n%s", got, want)
 	}
@@ -402,7 +402,7 @@ func TestActivity(t *testing.T) {
 	rt = router()
 	do(rt, app, "203.0.113.8:1", "POST", "/login", 1)
 	keep(rt)
-	if got, want := shown(rt), "2026-10-11 "+app+" 203.0.113.8 2 0 0"; got != want {
+	if got, want := shown(rt), "2026-10-11 "+app+"  203.0.113.8 2 0 0"; got != want {
 		t.Errorf("30 days on:\n%s, want\n%s", got, want)
 	}
 	db, err = bbolt.Open(path, 0o600, nil)
@@ -416,6 +416,15 @@ func TestActivity(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// Visitors pick the name they ask for: it is cut to the longest DNS name.
+func TestAskedCapped(t *testing.T) {
+	s := newActivity()
+	s.flagUnknown(strings.Repeat("a", 1000), "192.0.2.1")
+	if a := s.all(); len(a) != 1 || len(a[0].Asked) != 253 {
+		t.Errorf("activity: %+v", a)
+	}
 }
 
 // A broken database is set aside for a new one; it never stops the client.

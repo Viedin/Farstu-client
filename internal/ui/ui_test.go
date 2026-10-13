@@ -409,7 +409,9 @@ func TestActivityAddsUp(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("visitors:\n%q, want\n%q", got, want)
 	}
-	if d := days(all); len(d) != 5 || d[0].Date != "Sat 10 Oct" || d[0].What != "1 failed sign-in, 7 requests for pages that don't exist" || !d[0].SignIn {
+	if d := u.days(all); len(d) != 5 || d[0].Date != "Sat 10 Oct" || !d[0].SignIn || len(d[0].Visitors) != 3 ||
+		fmt.Sprint(d[0].Visitors[0]) != "{immich 203.0.113.7 1 failed sign-in 01:00  true}" ||
+		d[0].Visitors[1].Visitor != "198.51.100.2" || d[0].Visitors[1].What != "4 requests for pages that don't exist" {
 		t.Errorf("days: %+v", d)
 	}
 	if msg, bad := u.today(all); msg != "Today: 1 sign-in failed or blocked" || !bad {

@@ -19,6 +19,7 @@ import (
 type Activity struct {
 	Day      time.Time // local midnight
 	Host     string    // "" for names not turned on
+	Asked    string    // the name asked for when Host is "", at most 253 bytes
 	Visitor  string    // IP, or /64 for IPv6
 	Failed   int       // sign-ins the app refused
 	Blocked  int       // sign-ins blocked by the limit
@@ -26,7 +27,13 @@ type Activity struct {
 	Last     time.Time
 }
 
-func (a Activity) key() string { return a.Day.Format(time.DateOnly) + "|" + a.Host + "|" + a.Visitor }
+func (a Activity) key() string {
+	k := a.Day.Format(time.DateOnly) + "|" + a.Host + "|" + a.Visitor
+	if a.Asked != "" { // keys saved before Asked existed stay the same
+		k += "|" + a.Asked
+	}
+	return k
+}
 
 func (a Activity) signIn() bool { return a.Failed+a.Blocked > 0 }
 
@@ -63,9 +70,19 @@ func newActivity() activity {
 
 // flag counts a sign-in or a page not found against visitor.
 func (s *activity) flag(host, visitor string, k kind) {
+	s.count(Activity{Host: host, Visitor: visitor}, k)
+}
+
+// flagUnknown counts a request for a name not turned on, keeping the name
+// so the owner can tell a stale bookmark from someone guessing names.
+func (s *activity) flagUnknown(asked, visitor string) {
+	s.count(Activity{Asked: asked[:min(len(asked), 253)], Visitor: visitor}, notFound) // visitors pick the name: longest DNS name
+}
+
+func (s *activity) count(a Activity, k kind) {
 	now := s.now()
 	y, m, d := now.Date()
-	a := Activity{Day: time.Date(y, m, d, 0, 0, 0, 0, now.Location()), Host: host, Visitor: visitor}
+	a.Day = time.Date(y, m, d, 0, 0, 0, 0, now.Location())
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, _ := s.add(a)
