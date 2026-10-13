@@ -52,6 +52,7 @@ func TestRecipes(t *testing.T) {
 		"ghcr.io/teableio/teable-community:latest":           "teable",
 		"wechatopenai/weknora-ui:v0.5.0":                     "weknora",
 		"wechatopenai/weknora-app:v0.5.0":                    "",
+		"ghcr.io/runtipi/runtipi:v4.5.0":                     "runtipi",
 		"localhost:5000/nextcloud:29":                        "",
 		"ghcr.io/immich-app/immich-machine-learning:release": "",
 		"sha256:0123abcd":                                    "",

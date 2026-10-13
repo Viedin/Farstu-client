@@ -1,0 +1,11 @@
+app: runtipi
+match: { images: ["ghcr.io/runtipi/runtipi"] }
+# The dashboard and its API, straight to the container: Traefik in front of
+# it is only the local entry point. Unsafe requests are checked against
+# X-Forwarded-Host and -Proto, which the client sets.
+upstream_port: 3000
+# The first account to register becomes the operator.
+setup_done: { path: /api/user-context, field: isConfigured }
+login:
+  - { method: POST, path: /api/auth/login }
+  - { method: POST, path: /api/auth/verify-totp }
