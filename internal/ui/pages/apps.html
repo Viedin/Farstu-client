@@ -26,6 +26,21 @@ const check = (el, tries) => fetch("/apps/" + encodeURIComponent(el.dataset.app)
   })
   .catch(() => { el.textContent = "Could not check this app"; el.className = "status bad" })
 for (const el of document.querySelectorAll("[data-app]")) check(el, 8)
+for (const b of document.querySelectorAll("[data-qr]")) b.onclick = () => {
+  const q = b.closest("form").querySelector(".qr")
+  q.hidden = !q.hidden; b.setAttribute("aria-expanded", !q.hidden)
+}
+// The page is usually plain http on the LAN, where navigator.clipboard is
+// missing: fall back to selecting the text.
+for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => {
+  if (navigator.clipboard) navigator.clipboard.writeText(b.dataset.copy)
+  else {
+    const t = document.createElement("textarea")
+    t.value = b.dataset.copy; document.body.append(t); t.select(); document.execCommand("copy"); t.remove()
+  }
+  b.classList.add("ok"); b.title = "Copied"
+  setTimeout(() => { b.classList.remove("ok"); b.title = "Copy address" }, 1500)
+}
 </script>{{end}}
 
 {{define "app"}}<form class="card" method="post" action="/apps/{{.Name}}">
@@ -34,10 +49,13 @@ for (const el of document.querySelectorAll("[data-app]")) check(el, 8)
 {{if .Unchecked}}<div class="host muted">Can't check whether it's running</div>
 {{else if .Missing}}<div class="host bad">Not running. Turns off by itself if it's not back within a day.</div>
 {{else if .Problem}}<div class="host bad">{{.Problem}}</div>
-{{else if .On}}<a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
+{{else if .On}}<div class="links"><a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
+<button class="icon" type="button" title="Copy address" aria-label="Copy address" data-copy="https://{{.Host}}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>
+<button class="icon" type="button" title="QR code for your phone" aria-label="QR code for your phone" aria-expanded="false" data-qr><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M17 17h4v4h-4"/></svg></button></div>
 {{else}}<div class="host muted">Off, not reachable from the internet</div>{{end}}
 </div>
 <button class="switch" role="switch" aria-checked="{{.On}}" aria-label="{{.Name}}" name="on" value="{{if .On}}0{{else}}1{{end}}"></button>
 </div>
+{{if and .On (not (or .Unchecked .Missing .Problem))}}<div class="qr" hidden>{{qr (print "https://" .Host)}}</div>{{end}}
 {{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}" data-on="{{.On}}">Checking…</div>{{end}}
 </form>{{end}}

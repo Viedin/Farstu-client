@@ -27,6 +27,7 @@ import (
 	"github.com/viedin/farstu-client/internal/discover"
 	"github.com/viedin/farstu-client/internal/proxy"
 	"github.com/viedin/farstu-client/internal/recipes"
+	"rsc.io/qr"
 )
 
 type App struct {
@@ -346,7 +347,26 @@ var pageFiles embed.FS
 //go:embed icon.svg
 var icon []byte
 
-var pages = template.Must(template.ParseFS(pageFiles, "pages/*.html"))
+var pages = template.Must(template.New("").Funcs(template.FuncMap{"qr": qrSVG}).ParseFS(pageFiles, "pages/*.html"))
+
+// qrSVG draws text as a QR code, with the quiet zone, for a phone to scan.
+func qrSVG(text string) template.HTML {
+	c, err := qr.Encode(text, qr.M)
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<svg viewBox="-4 -4 %d %d" shape-rendering="crispEdges"><rect x="-4" y="-4" width="100%%" height="100%%" fill="#fff"/><path fill="#000" d="`, c.Size+8, c.Size+8)
+	for y := range c.Size {
+		for x := range c.Size {
+			if c.Black(x, y) {
+				fmt.Fprintf(&b, "M%d %dh1v1h-1z", x, y)
+			}
+		}
+	}
+	b.WriteString(`"/></svg>`)
+	return template.HTML(b.String()) // only numbers from the encoder, nothing from text
+}
 
 func (u *UI) mux() http.Handler {
 	mux := http.NewServeMux()

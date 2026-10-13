@@ -338,6 +338,9 @@ func TestPage(t *testing.T) {
 		t.Errorf("status while off: %s", body)
 	}
 	u.Set("immich", true)
+	if _, body := get("localhost:7080", "/"); !strings.Contains(body, `data-copy="https://immich.u.farstu.test"`) || !strings.Contains(body, `<path fill="#000" d="M`) {
+		t.Errorf("copy and QR code while on: %s", body)
+	}
 	if _, body := get("localhost:7080", "/apps/immich/status"); body != `{"text":"Reachable from the internet (7 ms)","ok":true}`+"\n" {
 		t.Errorf("status while on: %s", body)
 	}
