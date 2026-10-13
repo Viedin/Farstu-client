@@ -15,17 +15,20 @@
 <p class="muted foot"><a href="/activity">Activity</a>: sign-ins and scans, last 30 days</p>
 {{with .Account}}<p class="muted foot"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
 <script>
-// An app just turned on reconnects the tunnel, and right after connecting
-// the certificate is still on its way: keep checking an app that is on for
-// about 30s before showing why it can't be reached.
-const check = (el, tries) => fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
+// A starting app takes a while to answer, and an app just turned on
+// reconnects the tunnel and waits for its certificate: show only
+// "Checking…" until it is reachable, or still isn't after a minute.
+const check = (el, until) => fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
   .then(r => r.json())
   .then(s => {
-    if (!s.ok && el.dataset.on === "true" && tries > 1) return setTimeout(() => check(el, tries - 1), 3000)
+    if (!s.ok && s.text && Date.now() < until) throw "retry"
     el.textContent = s.text; el.className = "status " + (s.ok ? "ok" : "bad")
   })
-  .catch(() => { el.textContent = "Could not check this app"; el.className = "status bad" })
-for (const el of document.querySelectorAll("[data-app]")) check(el, 8)
+  .catch(() => {
+    if (Date.now() < until) return setTimeout(() => check(el, until), 3000)
+    el.textContent = "Could not check this app"; el.className = "status bad"
+  })
+for (const el of document.querySelectorAll("[data-app]")) check(el, Date.now() + 60000)
 for (const b of document.querySelectorAll("[data-qr]")) b.onclick = () => {
   const q = b.closest("form").querySelector(".qr")
   q.hidden = !q.hidden; b.setAttribute("aria-expanded", !q.hidden)
@@ -57,5 +60,5 @@ for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => {
 <button class="switch" role="switch" aria-checked="{{.On}}" aria-label="{{.Name}}" name="on" value="{{if .On}}0{{else}}1{{end}}"></button>
 </div>
 {{if and .On (not (or .Unchecked .Missing .Problem))}}<div class="qr" hidden>{{qr (print "https://" .Host)}}</div>{{end}}
-{{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}" data-on="{{.On}}">Checking…</div>{{end}}
+{{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}">Checking…</div>{{end}}
 </form>{{end}}
