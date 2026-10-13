@@ -41,7 +41,6 @@ server repo's TESTING.md.
 - Toggling an app off is enforced in the client's routing table immediately, not via DNS or frp.
 - TLS terminates only in the client. Private keys never leave the home server.
 - The device token only travels over verified TLS: system roots for the API, the pinned relay cert for frps. frpc without `trustedCaFile` skips verification.
-- User-facing errors name the specific cause ("App is not running", "Tunnel is down").
 - Nothing private in this repo: no server code, hostnames of our infrastructure beyond the public API default, credentials or test-rig details.
 
 ## Conventions

@@ -67,9 +67,6 @@ answers from your home network.
    the client, never dependent on DNS TTLs or the relay.
 5. **We never hold your TLS keys.** TLS terminates on your home server. The
    relay only sees encrypted bytes.
-6. **It must just work for non-technical users.** Every failure has a
-   specific, human-readable reason ("App is not running", "Tunnel is down",
-   "Certificate problem"), never a generic error.
 
 ## How it works
 
@@ -164,8 +161,7 @@ password.
 - Prefer the standard library; add dependencies only when they save real work.
 - Pass `context.Context` through anything that does I/O; every goroutine and
   the frpc subprocess must shut down cleanly.
-- Wrap errors with `%w`; map them to the user-facing reasons of principle 6
-  at the UI boundary. Log with `log/slog`; never log bodies, tokens or keys.
+- Wrap errors with `%w`. Log with `log/slog`; never log bodies, tokens or keys.
 - Tests for Host routing, PROXY header handling, toggle-off, guardrails and
   recipes are required.
 
