@@ -5,7 +5,7 @@ and the outside world).
 
 A remote-access layer for self-hosters. Flip a switch next to an app (e.g.
 Immich) running on your home server, and it becomes reachable at
-`<app>.<user>.<ourdomain>` from anywhere, including from the app's own native
+`<app>.<user>.farstu.app` from anywhere, including from the app's own native
 phone app. No domain to buy, no DNS, no router config, no terminal.
 
 This repository is the **Farstu Client**: the part that runs on your home
