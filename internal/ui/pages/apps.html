@@ -1,9 +1,9 @@
-{{define "apps"}}{{template "head"}}
+{{define "apps"}}{{template "head"}}{{template "nav" .}}
 <p class="muted">Turn an app on to reach it from anywhere, also from its phone app.{{with .Plan}} {{.}}{{end}}</p>
 {{with .Notice}}<p class="card error">{{.}}</p>{{end}}
 {{with .Problem}}<p class="card error">{{.}}</p>{{end}}
 {{with .Error}}<p class="card error">{{.}}</p>{{end}}
-{{range .Apps}}{{template "app" .}}
+{{with .Apps}}{{template "apps-table" .}}
 {{else}}{{if not .Problem}}<p class="card">No supported apps are running.{{with .Supported}} Farstu works with {{.}}.{{end}}</p>{{end}}
 {{end}}
 {{with .Others}}<details>
@@ -15,12 +15,8 @@
 <li>password guessing is slowed down.</li>
 </ul>
 <button class="button" type="button" id="accept">I understand the risks, show them</button>
-<div id="others" hidden>
-{{range .}}{{template "app" .}}
-{{end}}</div></details>{{end}}
+<div id="others" hidden>{{template "apps-table" .}}</div></details>{{end}}
 {{with .Today}}<a class="card{{if $.SignIns}} error{{end}}" href="/activity">{{.}} →</a>{{end}}
-<p class="muted foot"><a href="/activity">Activity</a>: sign-ins and scans, last 30 days</p>
-{{with .Account}}<p class="muted foot"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
 {{if .Feedback}}<details><summary>Send feedback</summary>
 <form id="feedback" method="post" action="/feedback">
 <textarea name="message" required maxlength="5000" aria-label="Feedback" placeholder="What works, what doesn't, what you'd like"></textarea>
@@ -32,15 +28,20 @@
 // "Checking…" until it is reachable, or still isn't after a minute. Each
 // check asks Farstu Server, which limits them per address (shared with
 // neighbours behind the same one): wait longer each time.
+// The chip says it short, its tooltip in full, and the line after it shows
+// that where nothing can hover.
+const show = (el, label, cls, text) => {
+  el.textContent = label; el.className = "chip " + cls; el.dataset.tip = text; el.nextElementSibling.textContent = text
+}
 const check = (el, until, wait = 3000) => fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
   .then(r => r.json())
   .then(s => {
     if (!s.ok && s.text && Date.now() < until) throw "retry"
-    el.textContent = s.text; el.className = "status " + (s.ok ? "ok" : "bad")
+    if (s.text) show(el, s.ok ? "Online" : "Problem", s.ok ? "ok" : "bad", s.text) // none: off, as rendered
   })
   .catch(() => {
     if (Date.now() < until) return setTimeout(() => check(el, until, Math.min(wait * 2, 15000)), wait)
-    el.textContent = "Could not check this app"; el.className = "status bad"
+    show(el, "Unknown", "bad", "Could not check this app")
   })
 // The other containers stay hidden until the warning above them is
 // accepted once in this browser.
@@ -64,7 +65,7 @@ if (fb) fb.onsubmit = e => {
 }
 for (const el of document.querySelectorAll("[data-app]")) check(el, Date.now() + 60000)
 for (const b of document.querySelectorAll("[data-qr]")) b.onclick = () => {
-  const q = b.closest("form").querySelector(".qr")
+  const q = b.closest("tr").nextElementSibling
   q.hidden = !q.hidden; b.setAttribute("aria-expanded", !q.hidden)
 }
 // The page is usually plain http on the LAN, where navigator.clipboard is
@@ -75,24 +76,29 @@ for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => {
     const t = document.createElement("textarea")
     t.value = b.dataset.copy; document.body.append(t); t.select(); document.execCommand("copy"); t.remove()
   }
-  b.classList.add("ok"); b.title = "Copied"
-  setTimeout(() => { b.classList.remove("ok"); b.title = "Copy address" }, 1500)
+  b.classList.add("ok"); b.dataset.tip = "Copied"; showTip(b)
+  setTimeout(() => { b.classList.remove("ok"); b.dataset.tip = "Copy address" }, 1500)
 }
 </script>{{end}}
 
-{{define "app"}}<form class="card" method="post" action="/apps/{{.Name}}">
-<div class="row"><div>
+{{define "apps-table"}}<div class="card table"><table>
+<thead><tr><th>App</th><th class="fit">Status</th><th class="end">On</th></tr></thead>
+<tbody>{{range .}}{{template "app" .}}{{end}}</tbody>
+</table></div>{{end}}
+
+{{define "app"}}{{$reachable := and .On (not (or .Unchecked .Missing .Problem))}}<tr><td>
 <div class="name">{{.Name}}{{if .Unsupported}} <span class="tag">Unsupported</span>{{end}}</div>
-{{if .Unchecked}}<div class="host muted">Can't check whether it's running</div>
-{{else if .Missing}}<div class="host bad">Not running. Turns off by itself if it's not back within a day.</div>
-{{else if .Problem}}<div class="host bad">{{.Problem}}</div>
-{{else if .On}}<div class="links"><a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
-<button class="icon" type="button" title="Copy address" aria-label="Copy address" data-copy="https://{{.Host}}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>
-<button class="icon" type="button" title="QR code for your phone" aria-label="QR code for your phone" aria-expanded="false" data-qr><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M17 17h4v4h-4"/></svg></button></div>
-{{else}}<div class="host muted">Off, not reachable from the internet</div>{{end}}
-</div>
+{{if $reachable}}<div class="links"><a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
+<button class="icon" type="button" data-tip="Copy address" aria-label="Copy address" data-copy="https://{{.Host}}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>
+<button class="icon" type="button" data-tip="QR code for your phone" aria-label="QR code for your phone" aria-expanded="false" data-qr><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M17 17h4v4h-4"/></svg></button></div>{{end}}
+</td><td class="fit">
+{{if .Unchecked}}<span class="chip" data-tip="Can't check whether it's running">Unknown</span><span class="why">Can't check whether it's running</span>
+{{else if .Missing}}<span class="chip bad" data-tip="Not running. Turns off by itself if it's not back within a day.">Not running</span><span class="why">Turns off by itself if it's not back within a day.</span>
+{{else if .Problem}}<span class="chip bad" data-tip="{{.Problem}}">Problem</span><span class="why">{{.Problem}}</span>
+{{else if .On}}<span class="chip" data-app="{{.Name}}" data-tip="Checking whether it's reachable from the internet">Checking…</span><span class="why"></span>
+{{else}}<span class="chip" data-app="{{.Name}}" data-tip="Not reachable from the internet">Off</span><span class="why"></span>{{end}}
+</td><td class="end"><form method="post" action="/apps/{{.Name}}">
 <button class="switch" role="switch" aria-checked="{{.On}}" aria-label="{{.Name}}" name="on" value="{{if .On}}0{{else}}1{{end}}"></button>
-</div>
-{{if and .On (not (or .Unchecked .Missing .Problem))}}<div class="qr" hidden>{{qr (print "https://" .Host)}}</div>{{end}}
-{{if not (or .Missing .Problem)}}<div class="status" data-app="{{.Name}}">Checking…</div>{{end}}
-</form>{{end}}
+</form></td></tr>
+{{if $reachable}}<tr class="qr" hidden><td colspan="3">{{qr (print "https://" .Host)}}</td></tr>{{end}}
+{{end}}

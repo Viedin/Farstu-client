@@ -379,8 +379,8 @@ func TestPage(t *testing.T) {
 		!strings.Contains(body, "</script>") { // rendered to the end
 		t.Errorf("today: %s", body)
 	}
-	if _, body := get("localhost:7080", "/activity"); !strings.Contains(body, "20 requests for names that aren&#39;t turned on from 192.0.2.1") ||
-		!strings.Contains(body, `class="bar" style="width:100%"`) {
+	if _, body := get("localhost:7080", "/activity"); !strings.Contains(body, `<td class="mono">192.0.2.1</td><td><span class="chip " data-tip="20 requests for names that aren&#39;t turned on" data-n="20">404 ×20</span>`) ||
+		!strings.Contains(body, "</script>") {
 		t.Errorf("activity page: %s", body)
 	}
 }
@@ -403,18 +403,18 @@ func TestActivityAddsUp(t *testing.T) {
 	}
 	var got []string
 	for _, v := range u.visitors(all) {
-		got = append(got, fmt.Sprint(v.Name, ": ", v.What, " over ", v.Days, " days from ", v.Visitor, ", ", v.Ago, " ", v.SignIn))
+		got = append(got, fmt.Sprint(v.Name, ": ", v.What, " over ", v.Days, " days from ", v.Visitor, ", ", v.Ago))
 	}
 	want := []string{
-		"immich: 5 failed sign-ins over 5 days from 203.0.113.7, 11 h ago true",
-		"immich: 20 requests for pages that don't exist over 5 days from 198.51.100.2, 11 h ago false",
+		"immich: 5 failed sign-ins over 5 days from 203.0.113.7, 11 h ago",
+		"immich: 20 requests for pages that don't exist over 5 days from 198.51.100.2, 11 h ago",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("visitors:\n%q, want\n%q", got, want)
 	}
-	if d := u.days(all); len(d) != 5 || d[0].Date != "Sat 10 Oct" || !d[0].SignIn || len(d[0].Visitors) != 3 ||
-		fmt.Sprint(d[0].Visitors[0]) != "{immich 203.0.113.7 1 failed sign-in 01:00  true}" ||
-		d[0].Visitors[1].Visitor != "198.51.100.2" || d[0].Visitors[1].What != "4 requests for pages that don't exist" {
+	if d := u.days(all); len(d) != 5 || d[0].Date != "Sat 10 Oct" || len(d[0].Visitors) != 3 ||
+		fmt.Sprint(d[0].Visitors[0]) != "{immich 203.0.113.7 1 failed sign-in 01:00  1791594000}" ||
+		d[0].Visitors[1].Visitor != "198.51.100.2" || d[0].Visitors[1].What.String() != "4 requests for pages that don't exist" {
 		t.Errorf("days: %+v", d)
 	}
 	if msg, bad := u.today(all); msg != "Today: 1 sign-in failed or blocked" || !bad {

@@ -406,9 +406,9 @@ func (u *UI) mux() http.Handler {
 			Problem, Error, Supported, Account string
 			Today                              string
 			SignIns                            bool
-			Plan, Notice                       string
+			Plan, Notice, Page                 string
 			Feedback                           bool
-		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account, today, signIns, plan, notice, u.Feedback != nil})
+		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account, today, signIns, plan, notice, "apps", u.Feedback != nil})
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusOK, "")
@@ -417,9 +417,10 @@ func (u *UI) mux() http.Handler {
 		all := u.router.Activity()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		pages.ExecuteTemplate(w, "activity", struct {
-			Visitors []visitorRow
-			Days     []dayRow
-		}{u.visitors(all), u.days(all)})
+			Visitors      []visitorRow
+			Days          []dayRow
+			Page, Account string
+		}{u.visitors(all), u.days(all), "activity", u.Account})
 	})
 	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
@@ -496,21 +497,36 @@ func (t *tally) add(a proxy.Activity) {
 func (t tally) signIns() int { return t.failed + t.blocked }
 func (t tally) total() int   { return t.signIns() + t.notFound + t.unknown }
 
-func (t tally) String() string {
-	var s []string
-	if t.failed > 0 {
-		s = append(s, plural(t.failed, "failed sign-in"))
+// status is one kind of activity as the status code visitors got, Title
+// what it means. Failed sign-ins come back as 400, 401 or 403.
+type status struct {
+	Code, Class, Title string
+	N                  int
+}
+
+// statuses String is what they mean, in words.
+type statuses []status
+
+func (s statuses) String() string {
+	var t []string
+	for _, x := range s {
+		t = append(t, x.Title)
 	}
-	if t.blocked > 0 {
-		s = append(s, plural(t.blocked, "sign-in attempt")+" blocked")
+	return strings.Join(t, ", ")
+}
+
+func (t tally) statuses() statuses {
+	var s statuses
+	add := func(n int, code, class, title string) {
+		if n > 0 {
+			s = append(s, status{code, class, title, n})
+		}
 	}
-	if t.notFound > 0 {
-		s = append(s, plural(t.notFound, "request")+" for pages that don't exist")
-	}
-	if t.unknown > 0 {
-		s = append(s, plural(t.unknown, "request")+" for names that aren't turned on")
-	}
-	return strings.Join(s, ", ")
+	add(t.failed, "4xx", "bad", plural(t.failed, "failed sign-in"))
+	add(t.blocked, "429", "warn", plural(t.blocked, "sign-in attempt")+" blocked")
+	add(t.notFound, "404", "", plural(t.notFound, "request")+" for pages that don't exist")
+	add(t.unknown, "404", "", plural(t.unknown, "request")+" for names that aren't turned on")
+	return s
 }
 
 func plural(n int, s string) string {
@@ -549,9 +565,10 @@ func (u *UI) today(all []proxy.Activity) (msg string, signIns bool) {
 
 // visitorRow is what one visitor did at one app over the last 30 days.
 type visitorRow struct {
-	Name, Visitor, What, Ago string // Name "" for names not turned on
-	Days                     int
-	SignIn                   bool
+	Name, Visitor, Ago string // Name "" for names not turned on
+	What               statuses
+	Days               int
+	Unix               int64 // last seen, for sorting
 }
 
 // visitors are the 50 that tried to sign in or scanned, sign-ins first.
@@ -589,25 +606,23 @@ func (u *UI) visitors(all []proxy.Activity) []visitorRow {
 		if s.signIns() == 0 && s.notFound+s.unknown < proxy.ScanMin || len(rows) == 50 {
 			continue
 		}
-		rows = append(rows, visitorRow{strings.TrimSuffix(k.host, "."+u.zone), k.visitor, s.String(), ago(u.now().Sub(s.last)), s.days, s.signIns() > 0})
+		rows = append(rows, visitorRow{strings.TrimSuffix(k.host, "."+u.zone), k.visitor, ago(u.now().Sub(s.last)), s.statuses(), s.days, s.last.Unix()})
 	}
 	return rows
 }
 
-// dayRow is one day's activity by visitor, Width its share of the busiest
-// day.
+// dayRow is one day's activity by visitor.
 type dayRow struct {
 	Date     string
-	Width    int
-	SignIn   bool
 	Visitors []hitRow
 }
 
 // hitRow is what one visitor did at one app on one day.
 type hitRow struct {
-	Name, Visitor, What, Time string // Name "" for names not turned on
-	Asked                     string // the name asked for instead
-	SignIn                    bool
+	Name, Visitor string // Name "" for names not turned on
+	What          statuses
+	Time, Asked   string // Asked: the name asked for instead
+	Unix          int64  // for sorting
 }
 
 // days are the days with activity, newest first, each listing every
@@ -618,16 +633,6 @@ func (u *UI) days(all []proxy.Activity) []dayRow {
 		d := a.Day.Format(time.DateOnly)
 		by[d] = append(by[d], a)
 	}
-	sum := func(l []proxy.Activity) (t tally) {
-		for _, a := range l {
-			t.add(a)
-		}
-		return t
-	}
-	busiest := 1 // no dividing by zero
-	for _, l := range by {
-		busiest = max(busiest, sum(l).total())
-	}
 	var rows []dayRow
 	for _, d := range slices.Backward(slices.Sorted(maps.Keys(by))) {
 		l := by[d]
@@ -637,13 +642,12 @@ func (u *UI) days(all []proxy.Activity) []dayRow {
 			}
 			return b.Failed + b.Blocked + b.NotFound - a.Failed - a.Blocked - a.NotFound
 		})
-		t := sum(l)
 		day, _ := time.Parse(time.DateOnly, d)
-		r := dayRow{day.Format("Mon 2 Jan"), max(t.total()*100/busiest, 1), t.signIns() > 0, nil}
+		r := dayRow{day.Format("Mon 2 Jan"), nil}
 		for _, a := range l {
 			var v tally
 			v.add(a)
-			r.Visitors = append(r.Visitors, hitRow{strings.TrimSuffix(a.Host, "."+u.zone), a.Visitor, v.String(), a.Last.Format("15:04"), strings.TrimSuffix(a.Asked, "."+u.zone), v.signIns() > 0})
+			r.Visitors = append(r.Visitors, hitRow{strings.TrimSuffix(a.Host, "."+u.zone), a.Visitor, v.statuses(), a.Last.Format("15:04"), strings.TrimSuffix(a.Asked, "."+u.zone), a.Last.Unix()})
 		}
 		rows = append(rows, r)
 	}

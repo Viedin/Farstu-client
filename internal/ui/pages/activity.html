@@ -1,13 +1,44 @@
-{{define "activity"}}{{template "head"}}
-<p><a href="/">← Apps</a></p>
+{{define "activity"}}{{template "head"}}{{template "nav" .}}
 <p class="muted">Sign-ins and requests for pages that don't exist, last 30 days. Every address on the internet gets scanned; visitors only reach apps you turned on.</p>
+{{if .Days}}<input class="search" type="search" placeholder="Search app, visitor or status" aria-label="Search activity">{{end}}
 {{with .Visitors}}<h2>Visitors</h2>
-<div class="card">{{range .}}<p class="act{{if .SignIn}} bad{{end}}">{{with .Name}}<span class="name">{{.}}</span>: {{end}}{{.What}}{{if gt .Days 1}} over {{.Days}} days{{end}} from {{.Visitor}}, <span class="muted">{{.Ago}}</span></p>
-{{end}}</div>
+<div class="card table"><table class="wide">
+<thead><tr><th><button>App</button></th><th><button>Visitor</button></th><th><button>Status</button></th><th><button>Last</button></th></tr></thead>
+<tbody>{{range .}}<tr><td>{{with .Name}}<span class="name">{{.}}</span>{{else}}<span class="muted">not turned on</span>{{end}}</td><td class="mono">{{.Visitor}}</td><td>{{template "statuses" .What}}</td><td class="muted" data-sort="{{.Unix}}">{{.Ago}}{{if gt .Days 1}}, {{.Days}} days{{end}}</td></tr>
+{{end}}</tbody></table></div>
 <p class="muted">Failed sign-ins are a wrong password, or someone guessing: make sure that app's passwords are strong. Scans look for known weak spots and usually move on.</p>{{end}}
 {{with .Days}}<h2>Per day</h2>
-<div class="card">{{range .}}<p class="act{{if .SignIn}} bad{{end}}"><b>{{.Date}}</b></p>
-<div class="bar{{if .SignIn}} sign{{end}}" style="width:{{.Width}}%"></div>
-{{range .Visitors}}<p class="act{{if .SignIn}} bad{{end}}">{{.Visitor}} → {{with .Name}}<span class="name">{{.}}</span>{{else}}{{with .Asked}}{{.}}{{else}}no name{{end}} <span class="muted">(not turned on)</span>{{end}}: {{.What}} <span class="muted">last {{.Time}}</span></p>
-{{end}}{{end}}</div>{{else}}<p class="card">Nothing in the last 30 days.</p>{{end}}
+<div class="card table"><table class="wide">
+<thead><tr><th><button>When</button></th><th><button>App</button></th><th><button>Visitor</button></th><th><button>Status</button></th></tr></thead>
+<tbody>{{range .}}{{$date := .Date}}{{range .Visitors}}<tr><td class="muted" data-sort="{{.Unix}}">{{$date}} {{.Time}}</td><td>{{with .Name}}<span class="name">{{.}}</span>{{else}}<span class="muted" data-tip="Not turned on">{{with .Asked}}{{.}}{{else}}no name{{end}}</span>{{end}}</td><td class="mono">{{.Visitor}}</td><td>{{template "statuses" .What}}</td></tr>
+{{end}}{{end}}</tbody></table></div>
+<p class="muted"><span class="chip bad">4xx</span> the app refused a sign-in, <span class="chip warn">429</span> Farstu blocked sign-ins after too many tries, <span class="chip">404</span> a page or name that doesn't exist. Point at a status for details.</p>
+<script>
+// Sort by a column's data-sort, else its text; statuses by sign-ins,
+// then count. Numbers sort biggest first, text A to Z.
+const score = td => [...td.querySelectorAll(".chip")].reduce((v, c) => v + c.dataset.n * (c.matches(".bad,.warn") ? 1e6 : 1), 0)
+const value = td => td.dataset.sort ?? (td.querySelector(".chip") ? score(td) : td.textContent.trim())
+const cmp = (a, b) => a !== "" && b !== "" && !isNaN(a) && !isNaN(b) ? a - b : String(a).localeCompare(b, undefined, {numeric: true})
+for (const table of document.querySelectorAll("table")) {
+  const ths = [...table.tHead.rows[0].cells]
+  ths.forEach((th, i) => th.querySelector("button").onclick = () => {
+    const rows = [...table.tBodies[0].rows], first = value(rows[0].cells[i])
+    const was = th.getAttribute("aria-sort")
+    const desc = was ? was == "ascending" : first !== "" && !isNaN(first)
+    rows.sort((a, b) => cmp(value(a.cells[i]), value(b.cells[i])) * (desc ? -1 : 1))
+    table.tBodies[0].append(...rows)
+    for (const h of ths) h.removeAttribute("aria-sort")
+    th.setAttribute("aria-sort", desc ? "descending" : "ascending")
+  })
+}
+// Search the text and what each status means.
+const search = document.querySelector(".search")
+search.oninput = () => {
+  const q = search.value.trim().toLowerCase()
+  for (const tr of document.querySelectorAll("tbody tr"))
+    tr.hidden = !(tr.textContent + [...tr.querySelectorAll("[data-tip]")].map(e => " " + e.dataset.tip).join("")).toLowerCase().includes(q)
+}
+</script>{{else}}<p class="card">Nothing in the last 30 days.</p>{{end}}
 {{end}}
+
+{{define "statuses"}}{{range .}}<span class="chip {{.Class}}" data-tip="{{.Title}}" data-n="{{.N}}">{{.Code}}{{if gt .N 1}} ×{{.N}}{{end}}</span> {{end}}{{end}}

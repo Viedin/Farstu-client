@@ -5,33 +5,34 @@
 <title>Farstu</title>
 <link rel="icon" href="/favicon.svg">
 <style>
-:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--text:#1d2129;--muted:#667085;--line:#e3e6eb;--accent:#2563eb;--ok:#16a34a;--bad:#dc2626}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--text:#e6e8eb;--muted:#9aa3af;--line:#2c313a;--accent:#5b93ff;--ok:#22c55e;--bad:#f87171}}
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--text:#1d2129;--muted:#667085;--line:#e3e6eb;--accent:#2563eb;--ok:#16a34a;--bad:#dc2626;--warn:#b45309}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--text:#e6e8eb;--muted:#9aa3af;--line:#2c313a;--accent:#5b93ff;--ok:#22c55e;--bad:#f87171;--warn:#fbbf24}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
-main{max-width:560px;margin:0 auto;padding:32px 16px}
+main{max-width:760px;margin:0 auto;padding:32px 16px}
 h1{font-size:24px;margin:0}
+nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:16px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+nav .brand{display:flex;align-items:center;gap:10px;color:inherit;font-size:20px;font-weight:700;text-decoration:none}
+nav .links a{padding:6px 12px;border-radius:8px;color:var(--muted);font-size:14px;font-weight:500;text-decoration:none}
+nav .links a:hover{color:var(--text);background:var(--line)}
+nav .links a[aria-current=page]{color:var(--text);background:var(--line)}
+nav a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 h2{font-size:18px;margin:32px 0 0}
-.act{font-size:14px;margin:4px 0}
 p{margin:8px 0}
 a{color:var(--accent)}
 .muted{color:var(--muted)}
 .card{display:block;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:12px}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .name{font-weight:600;text-transform:capitalize}
 .tag{font-size:12px;font-weight:500;text-transform:none;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:1px 6px;vertical-align:2px}
 details{margin-top:24px}
 summary{cursor:pointer;font-weight:600}
-.foot{margin-top:24px}
 .host{font-size:14px;word-break:break-all}
-.links{display:flex;align-items:center;gap:4px}
+.links{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
 .icon{flex:none;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer}
 .icon:hover{background:var(--line)}
 .icon:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.qr svg{display:block;width:200px;max-width:100%;margin-top:12px;border-radius:8px}
-.status{font-size:14px;color:var(--muted);margin-top:8px}
-.status:empty{display:none}
+.qr svg{display:block;width:200px;max-width:100%;border-radius:8px}
 .ok{color:var(--ok)}
 .bad{color:var(--bad)}
 .error{border-color:var(--bad);color:var(--bad)}
@@ -43,10 +44,56 @@ summary{cursor:pointer;font-weight:600}
 .button{display:inline-block;margin:8px 0;padding:10px 20px;border:0;border-radius:8px;background:var(--accent);color:#fff;font:inherit;font-weight:600;text-decoration:none;cursor:pointer}
 .button[hidden]{display:none}
 textarea{display:block;width:100%;min-height:100px;margin-top:12px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:inherit;font:inherit}
-.bar{height:4px;border-radius:2px;background:var(--muted);margin-bottom:8px}
-.bar.sign{background:var(--bad)}
+.search{display:block;width:100%;margin-top:16px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:inherit;font:inherit}
+.table{padding:0;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{padding:10px 16px;text-align:left;border-top:1px solid var(--line)}
+.wide th,.wide td{white-space:nowrap}
+.fit,.end{width:1%}
+.end{text-align:right}
+@media (max-width:480px){th,td{padding:10px 12px}}
+tr.qr td{border-top:0;padding-top:0}
+th{border-top:0;font-weight:500;color:var(--muted)}
+th button{padding:0;border:0;background:none;color:inherit;font:inherit;cursor:pointer}
+th button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+th[aria-sort=ascending] button::after{content:" ↑"}
+th[aria-sort=descending] button::after{content:" ↓"}
+tbody tr:hover{background:color-mix(in srgb,var(--line) 40%,transparent)}
+.mono{font-family:ui-monospace,Menlo,monospace}
+.chip{display:inline-block;padding:1px 6px;border-radius:4px;font:500 12px/1.5 ui-monospace,Menlo,monospace;color:var(--muted);background:color-mix(in srgb,var(--muted) 15%,transparent);cursor:default}
+.chip.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 15%,transparent)}
+.chip.bad{color:var(--bad);background:color-mix(in srgb,var(--bad) 15%,transparent)}
+.chip.warn{color:var(--warn);background:color-mix(in srgb,var(--warn) 15%,transparent)}
+.why{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} /* for screen readers; the tooltip shows it */
+@media (hover:none){.why:not(:empty){position:static;display:block;width:auto;height:auto;clip-path:none;min-width:8em;margin-top:4px;font-size:12px;color:var(--muted)}}
 .code{font:600 20px ui-monospace,Menlo,monospace;letter-spacing:2px}
+.tip{position:fixed;z-index:10;max-width:280px;padding:6px 10px;border-radius:6px;background:var(--text);color:var(--bg);font-size:13px;line-height:1.4;box-shadow:0 4px 12px #0003;pointer-events:none}
 </style>
+<script>
+// One tooltip for every [data-tip], fixed so a scrolling table can't clip
+// it: above the element, or below where there's no room.
+let tip
+const showTip = el => {
+  if (!tip) { tip = document.body.appendChild(document.createElement("div")); tip.className = "tip"; tip.setAttribute("role", "tooltip") }
+  tip.textContent = el.dataset.tip; tip.hidden = false; tip.style.left = 0
+  const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect()
+  tip.style.left = Math.max(8, Math.min(r.left + r.width / 2 - t.width / 2, innerWidth - t.width - 8)) + "px"
+  tip.style.top = (r.top - t.height - 6 < 8 ? r.bottom + 6 : r.top - t.height - 6) + "px"
+}
+const hideTip = () => { if (tip) tip.hidden = true }
+addEventListener("mouseover", e => { const el = e.target.closest("[data-tip]"); el ? showTip(el) : hideTip() })
+addEventListener("focusin", e => { const el = e.target.closest("[data-tip]"); if (el) showTip(el) })
+addEventListener("focusout", hideTip)
+addEventListener("scroll", hideTip, true)
+</script>
 <main>
-<h1>Farstu</h1>
+{{end}}
+
+{{define "nav"}}<nav>
+<a class="brand" href="/"><img src="/favicon.svg" alt="" width="28" height="28">Farstu</a>
+<div class="links">
+<a href="/"{{if eq .Page "apps"}} aria-current="page"{{end}}>Apps</a>
+<a href="/activity"{{if eq .Page "activity"}} aria-current="page"{{end}}>Activity</a>
+{{with .Account}}<a href="{{.}}" target="_blank" rel="noopener">Account ↗</a>{{end}}
+</div></nav>
 {{end}}
