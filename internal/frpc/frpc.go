@@ -121,11 +121,16 @@ func Run(ctx context.Context, c Config, restart <-chan struct{}) error {
 	}
 
 	backoff := time.Second
-	for first := true; ; first = false {
-		if !first {
-			if err := write(); err != nil { // keeps its owner from dropRoot
-				return err
-			}
+	for {
+		// A restart asked for while frpc was down (backing off) is done by
+		// this start, which renders the config anew: don't stop it right
+		// away. Before writing, so one asked for meanwhile still counts.
+		select {
+		case <-restart:
+		default:
+		}
+		if err := write(); err != nil { // keeps its owner from dropRoot
+			return err
 		}
 		runCtx, stop := context.WithCancel(ctx)
 		go func() {

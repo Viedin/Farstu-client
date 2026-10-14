@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/viedin/farstu-client/api"
+	"github.com/viedin/farstu-client/internal/atomicfile"
 )
 
 // No redirects: Go follows one from https to http on the same host, with
@@ -49,6 +50,10 @@ var ErrUnknownDevice = errors.New("this server was disconnected from its Farstu 
 // Device is what the client keeps after registering.
 type Device = api.DeviceTokenResponse
 
+// registerRetry is the first wait after a failed registration attempt;
+// it doubles up to 5 minutes. Tests shorten it.
+var registerRetry = 5 * time.Second
+
 // Register loads the device saved at path, or runs the device flow and saves
 // it there, passing each registration code to show. A corrupt file is an
 // error, not a reason to register again: that would silently give the user a
@@ -69,16 +74,31 @@ func Register(ctx context.Context, serverURL, path string, show func(api.DeviceC
 		return d, fmt.Errorf("read device file: %w", err)
 	}
 
-	for d.Token == "" { // an expired code returns an empty Device: start over
-		if d, err = deviceFlow(ctx, serverURL, show); err != nil {
-			return d, err
+	// An expired code returns an empty Device: start over. A server that's
+	// down or busy is waited out, not a reason to stop.
+	for wait := registerRetry; d.Token == ""; {
+		if d, err = deviceFlow(ctx, serverURL, show); err == nil {
+			wait = registerRetry
+			continue
 		}
+		if ctx.Err() != nil {
+			return d, ctx.Err()
+		}
+		slog.Warn("registration failed, retrying", "err", err, "in", wait)
+		select {
+		case <-ctx.Done():
+			return d, ctx.Err()
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, 5*time.Minute)
 	}
 	if d.RelayCert == "" {
 		return d, errors.New("Farstu Server sent no relay certificate; it needs an update")
 	}
 	b, _ = json.Marshal(d)
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	// Whole or not at all: a half-written file stops the client, and the
+	// token was shown only once.
+	if err := atomicfile.Write(path, b); err != nil {
 		return d, fmt.Errorf("save device file: %w", err)
 	}
 	fmt.Printf("Connected! Your apps will be at https://<app>.%s.%s\n\n", d.Subdomain, d.Domain)
@@ -112,7 +132,7 @@ func deviceFlow(ctx context.Context, serverURL string, show func(api.DeviceCodeR
 		case <-time.After(time.Duration(dc.Interval) * time.Second):
 		}
 		status, body, err := do(ctx, http.MethodPost, serverURL+"/v1/device/token", "", req)
-		if err == nil && status >= 500 {
+		if err == nil && (status >= 500 || status == http.StatusTooManyRequests) {
 			err = fmt.Errorf("HTTP %d", status)
 		}
 		if err != nil {

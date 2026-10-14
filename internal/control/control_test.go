@@ -9,14 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/viedin/farstu-client/api"
 )
 
 func TestRegisterRetries(t *testing.T) {
+	registerRetry = time.Millisecond
 	codes := 0
 	polls := []func(w http.ResponseWriter){
 		func(w http.ResponseWriter) { http.Error(w, "internal error", 500) }, // transient: retry
+		func(w http.ResponseWriter) { http.Error(w, "slow down", 429) },      // rate limited: retry
 		func(w http.ResponseWriter) {
 			w.WriteHeader(400)
 			json.NewEncoder(w).Encode(api.Error{Error: api.ErrAuthorizationPending})
@@ -33,6 +36,10 @@ func TestRegisterRetries(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/device/code":
 			codes++
+			if codes == 1 { // down at first: wait and try again, don't stop
+				http.Error(w, "unavailable", 503)
+				return
+			}
 			json.NewEncoder(w).Encode(api.DeviceCodeResponse{DeviceCode: "dc", UserCode: "ABCD-EFGH", Interval: 0})
 		case "/v1/device/token":
 			polls[0](w)
@@ -47,8 +54,8 @@ func TestRegisterRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Token != "tok" || codes != 2 || shown != 2 {
-		t.Fatalf("token %q after %d codes, %d shown, want tok after 2", d.Token, codes, shown)
+	if d.Token != "tok" || codes != 3 || shown != 2 {
+		t.Fatalf("token %q after %d code requests, %d shown, want tok after 3", d.Token, codes, shown)
 	}
 
 	// Saved and reused; no new registration.

@@ -104,6 +104,12 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 
 	// Up before registering: the page shows the link to connect this server.
 	page := ui.Page{Disconnected: disconnected}
+	var gwErr error
+	if page.Forwarders, gwErr = discover.Gateways(ctx, dockerSock); gwErr != nil {
+		slog.Warn("can't tell whether Docker forwards for the local page; use network_mode: host", "err", gwErr)
+	} else if len(page.Forwarders) > 0 {
+		slog.Warn("not on host networking: the local page refuses what Docker's port proxy forwards (IPv6, localhost); use network_mode: host", "gateways", page.Forwarders)
+	}
 	spawn(func() error { return page.Serve(ctx, uiLn) })
 	slog.Info("local page", "addr", uiAddr)
 	dev, err := control.Register(ctx, server, filepath.Join(dataDir, "device.json"), page.ShowCode)

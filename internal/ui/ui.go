@@ -17,13 +17,13 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/viedin/farstu-client/api"
+	"github.com/viedin/farstu-client/internal/atomicfile"
 	"github.com/viedin/farstu-client/internal/discover"
 	"github.com/viedin/farstu-client/internal/proxy"
 	"github.com/viedin/farstu-client/internal/recipes"
@@ -37,6 +37,7 @@ type App struct {
 	Problem  string // why it can't be turned on, e.g. two containers match
 	// Unsupported: no recipe; the page warns Farstu can't vouch it's safe.
 	Unsupported bool
+	Image       string // an unsupported app's image repository
 }
 
 // An app that is on and gone this long was uninstalled, not updated: it is
@@ -61,9 +62,13 @@ type UI struct {
 	blindSince time.Time            // when discovery started failing; zero while it works
 	goneSince  map[string]time.Time // apps that are on but not running
 	plan       api.Me               // zero until the server first answers: no app limit
-	notice     string               // apps the plan turned off
-	// ponytail: goneSince lives in memory, so a client restart restarts the
-	// clock; persist it if restarts during an uninstall turn out to matter.
+	notice     string               // apps the plan or a replaced container turned off
+	// Images of the unsupported apps that are on: one only has a name, so
+	// another container taking it must not be routed in its place.
+	images map[string]string
+	// ponytail: goneSince and images live in memory, so a client restart
+	// restarts the clock and trusts the first container seen by the name;
+	// persist them if restarts during an uninstall turn out to matter.
 
 	// Set before serving. Supported names the apps Farstu knows, Logins
 	// their sign-in paths by name; nil checks are skipped.
@@ -81,7 +86,7 @@ type UI struct {
 // Load reads which apps are on from path. They are routed once SetApps
 // reports them running. Missing or corrupt state means everything is off.
 func Load(path string, router *proxy.Router, zone string) *UI {
-	u := &UI{path: path, router: router, zone: zone, now: time.Now, goneSince: map[string]time.Time{}}
+	u := &UI{path: path, router: router, zone: zone, now: time.Now, goneSince: map[string]time.Time{}, images: map[string]string{}}
 	var names []string
 	b, err := os.ReadFile(path)
 	if err == nil {
@@ -105,6 +110,7 @@ func (u *UI) turnOff(name string) {
 	u.router.Disable(name + "." + u.zone)
 	u.on = slices.DeleteFunc(u.on, func(n string) bool { return n == name })
 	delete(u.goneSince, name)
+	delete(u.images, name)
 }
 
 // restart reconnects frpc if its proxy lists the apps that are on.
@@ -142,9 +148,10 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 	apps := []App{}
 	for _, n := range slices.Sorted(maps.Keys(running)) {
 		r := running[n]
-		apps = append(apps, App{Name: n, Host: n + "." + u.zone, Upstream: r.Upstream, Problem: r.Problem, Unsupported: r.Unsupported})
+		apps = append(apps, App{Name: n, Host: n + "." + u.zone, Upstream: r.Upstream, Problem: r.Problem, Unsupported: r.Unsupported, Image: r.Image})
 	}
 	now, forgot := u.now(), false
+	var replaced []string
 	for _, n := range slices.Clone(u.on) {
 		a, ok := find(apps, n)
 		since, gone := u.goneSince[n]
@@ -154,10 +161,19 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 			u.turnOff(n)
 			forgot = true
 			continue
+		case ok && a.Unsupported && u.images[n] != "" && u.images[n] != a.Image:
+			// Nothing vouches for the newcomer, as for a fresh install.
+			slog.Warn("a different container took an app's name, turning it off", "app", n, "was", u.images[n], "now", a.Image)
+			u.turnOff(n)
+			replaced = append(replaced, n)
+			continue
 		case !ok && !gone:
 			u.goneSince[n] = now
 		case ok:
 			delete(u.goneSince, n)
+		}
+		if ok && a.Unsupported {
+			u.images[n] = a.Image
 		}
 		old, _ := find(u.apps, n)
 		switch {
@@ -168,9 +184,12 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 		}
 	}
 	u.apps = apps
-	if forgot {
+	if len(replaced) > 0 {
+		u.notice = fmt.Sprintf("A different container now has the name %s, so it was turned off. Turn it on again if that's the one you want.", strings.Join(replaced, " and "))
+	}
+	if forgot || len(replaced) > 0 {
 		if err := u.save(); err != nil {
-			slog.Error("could not save apps turned off after a day gone; they are off until a restart", "err", err)
+			slog.Error("could not save apps turned off; they are off until a restart", "err", err)
 		}
 		u.restart()
 	}
@@ -209,6 +228,9 @@ func (u *UI) Set(name string, on bool) error {
 		return fmt.Errorf("could not save, %s stays off: %w", name, err)
 	}
 	u.router.Enable(a.Host, a.Upstream, u.Logins[name])
+	if a.Unsupported {
+		u.images[name] = a.Image
+	}
 	u.notice = ""
 	u.restart()
 	return nil
@@ -291,27 +313,7 @@ func find(apps []App, name string) (App, bool) {
 // the app back on. The order is kept: a lower app limit keeps the first.
 func (u *UI) save() error {
 	b, _ := json.Marshal(append([]string{}, u.on...)) // [] when none, not null
-	f, err := os.CreateTemp(filepath.Dir(u.path), ".apps-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(b)
-	if err == nil {
-		err = f.Sync()
-	}
-	if err := errors.Join(err, f.Close()); err != nil {
-		return err
-	}
-	if err := os.Rename(f.Name(), u.path); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(u.path)) // make the rename itself durable
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	return atomicfile.Write(u.path, b)
 }
 
 // status names the first thing standing between a visitor and the app, or
@@ -660,18 +662,23 @@ func ago(d time.Duration) string {
 	return plural(int(d.Hours()/24), "day") + " ago"
 }
 
-func (u *UI) handler() http.Handler { return guard(u.mux()) }
+func (u *UI) handler() http.Handler { return guard(u.mux(), nil) }
 
 // guard: a button here exposes an app to the internet, and the connect page
 // links this server to an account. Refuse requests from other sites, and
 // from DNS-rebound names, and framing: a form posted inside a frame counts
 // as same-origin, so a site framing this page could trick a click on a
-// switch.
-func guard(h http.Handler) http.Handler {
+// switch. Requests from forwarders, which pass on anyone's (see
+// discover.Gateways), are refused too.
+func guard(h http.Handler, forwarders []netip.Addr) http.Handler {
 	cop := http.NewCrossOriginProtection().Handler(h)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil && slices.Contains(forwarders, ap.Addr().Unmap()) {
+			http.Error(w, "Farstu can't tell who is asking through Docker's port forwarding. Open this page by the server's IPv4 address, or run Farstu with network_mode: host", http.StatusForbidden)
+			return
+		}
 		if !homeNetwork(r.RemoteAddr, onLink()) {
 			http.Error(w, "Open this page from your home network", http.StatusForbidden)
 			return
@@ -735,6 +742,8 @@ func localHost(host string) bool {
 // registers, then the app toggles.
 type Page struct {
 	Disconnected bool // set before serving: the previous device was disconnected from its account
+	// Set before serving: addresses that forward anyone's requests, refused.
+	Forwarders []netip.Addr
 
 	mu   sync.Mutex
 	code api.DeviceCodeResponse
@@ -772,7 +781,7 @@ func (p *Page) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Serve serves the page on ln until ctx is done.
 func (p *Page) Serve(ctx context.Context, ln net.Listener) error {
-	srv := &http.Server{Handler: guard(p), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: guard(p, p.Forwarders), ReadHeaderTimeout: 10 * time.Second}
 	defer context.AfterFunc(ctx, func() { srv.Close() })()
 	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("local page: %w", err)

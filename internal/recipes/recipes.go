@@ -98,7 +98,7 @@ func Load(fsys fs.FS) ([]Recipe, error) {
 func Find(rs []Recipe, image string) (Recipe, bool) {
 	for _, r := range rs {
 		for _, img := range r.Match.Images {
-			if repo(img) == repo(image) {
+			if Repo(img) == Repo(image) {
 				return r, true
 			}
 		}
@@ -106,11 +106,11 @@ func Find(rs []Recipe, image string) (Recipe, bool) {
 	return Recipe{}, false
 }
 
-// repo strips the tag or digest and Docker Hub's implied prefixes:
+// Repo strips the tag or digest and Docker Hub's implied prefixes:
 // "docker.io/library/nextcloud:apache" is "nextcloud".
 // ponytail: a container whose tag was re-pulled shows a bare image ID and
 // is not found; look up the ID's RepoTags if that bites.
-func repo(image string) string {
+func Repo(image string) string {
 	image, _, _ = strings.Cut(image, "@")
 	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
 		image = image[:i]

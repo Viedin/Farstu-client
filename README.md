@@ -47,6 +47,12 @@ docker compose up -d
 Apps start off, and turning one off takes effect at once. The local page only
 answers from your home network.
 
+Keep `network_mode: host`. On a Docker network instead (`ports: ["7080:7080"]`),
+Docker's port forwarding hides who is asking for IPv6 and `localhost`: anyone
+on the internet could reach the page over IPv6. So there, the page only
+answers at `http://<your server's IPv4>:7080` from another device on your home
+network, and refuses IPv6 and `localhost`.
+
 ## Product principles
 
 1. **No extra login layer.** We rely on each app's own login and user

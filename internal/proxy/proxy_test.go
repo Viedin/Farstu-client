@@ -69,7 +69,8 @@ func TestRouter(t *testing.T) {
 	}
 }
 
-// A visitor can't sign in to an app that trusts a sign-in proxy's headers.
+// A visitor can't sign in to an app that trusts a sign-in proxy's headers,
+// or pick the IP it sees.
 func TestIdentityHeadersDropped(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for k := range r.Header {
@@ -81,7 +82,7 @@ func TestIdentityHeadersDropped(t *testing.T) {
 	rt.Enable("app.u.farstu.test", up.Listener.Addr().String(), nil)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = "app.u.farstu.test"
-	for _, h := range []string{"Remote-User", "Remote_User", "X-Webauth-User", "X-Forwarded-User", "X-Forwarded-Email", "X-Authentik-Username", "Tailscale-User-Login", "Cf-Access-Authenticated-User-Email", "X-Auth-Request-Email"} {
+	for _, h := range []string{"Remote-User", "Remote_User", "X-Webauth-User", "X-Forwarded-User", "X-Forwarded-Email", "X-Authentik-Username", "Tailscale-User-Login", "Cf-Access-Authenticated-User-Email", "X-Auth-Request-Email", "True-Client-Ip", "Cf-Connecting-Ip", "X-Client-Ip"} {
 		req.Header[h] = []string{"admin"} // as sent, not canonicalized
 	}
 	req.Header.Set("Authorization", "Bearer kept")

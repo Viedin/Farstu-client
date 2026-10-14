@@ -15,7 +15,9 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +34,7 @@ type App struct {
 	// an admin account, limits password guessing at its login, or knows it
 	// asks every visitor for a password.
 	Unsupported bool
+	Image       string // an unsupported app's image repository, e.g. "someone/app"
 }
 
 // Watch calls found with the apps running now, by name, and again whenever
@@ -42,12 +45,7 @@ type App struct {
 // container stops. Following start/die events keeps a stale route from
 // sending one app's visitors to another for longer than one listing.
 func Watch(ctx context.Context, socket string, rs []recipes.Recipe, found func(map[string]App, error)) {
-	c := &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-		},
-		ResponseHeaderTimeout: 10 * time.Second, // a hung dockerd must surface as an error
-	}}
+	c := docker(socket)
 	for {
 		err := watch(ctx, c, rs, found)
 		if ctx.Err() != nil {
@@ -61,6 +59,55 @@ func Watch(ctx context.Context, socket string, rs []recipes.Recipe, found func(m
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+func docker(socket string) *http.Client {
+	return &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+		ResponseHeaderTimeout: 10 * time.Second, // a hung dockerd must surface as an error
+	}}
+}
+
+// Gateways are the gateways of this client's container networks, when it
+// runs on Docker networks rather than the host's. Docker's port proxy (for
+// IPv6, localhost, and in rootless Docker) hands every visitor of a
+// published port on, the internet's too, from a gateway: a private address.
+// None on host networking, outside Docker, or with a container hostname
+// other than its ID, which Docker's own is.
+func Gateways(ctx context.Context, socket string) ([]netip.Addr, error) {
+	id, err := os.Hostname()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var self struct {
+		HostConfig      struct{ NetworkMode string }
+		NetworkSettings struct {
+			Networks map[string]struct{ Gateway, IPv6Gateway string }
+		}
+	}
+	err = getJSON(ctx, docker(socket), "/containers/"+url.PathEscape(id)+"/json", &self)
+	if errors.Is(err, statusError(http.StatusNotFound)) {
+		return nil, nil // not a container Docker knows by this name: the host's
+	}
+	if err != nil {
+		return nil, err
+	}
+	if self.HostConfig.NetworkMode == "host" {
+		return nil, nil
+	}
+	var gws []netip.Addr
+	for _, n := range self.NetworkSettings.Networks {
+		for _, g := range []string{n.Gateway, n.IPv6Gateway} {
+			if ip, err := netip.ParseAddr(g); err == nil {
+				gws = append(gws, ip)
+			}
+		}
+	}
+	return gws, nil
 }
 
 // recheck is how often apps are listed without a Docker event: an app
@@ -247,6 +294,7 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]
 		}
 		r, ok := recipes.Find(rs, image)
 		if !ok {
+			ct.Image = image // the name, also for a re-pulled tag
 			unknown = append(unknown, ct)
 			continue
 		}
@@ -307,9 +355,9 @@ func unsupported(ct container, rs []recipes.Recipe, self map[string]bool) (strin
 	case slices.Contains(ports, 80):
 		port = 80
 	default:
-		return name, App{Unsupported: true, Problem: fmt.Sprintf("It listens on several ports %v; Farstu can't tell which one is its web page", ports)}, true
+		return name, App{Unsupported: true, Image: recipes.Repo(ct.Image), Problem: fmt.Sprintf("It listens on several ports %v; Farstu can't tell which one is its web page", ports)}, true
 	}
-	return name, App{Upstream: net.JoinHostPort(ip, strconv.Itoa(port)), Unsupported: true}, true
+	return name, App{Upstream: net.JoinHostPort(ip, strconv.Itoa(port)), Unsupported: true, Image: recipes.Repo(ct.Image)}, true
 }
 
 // hostLabel turns a container name into a DNS label: "/Immich_Server" is

@@ -351,10 +351,41 @@ func TestWatchUnsupported(t *testing.T) {
 	delete(r.apps, "gitlike")
 	delete(r.apps, "dup-a")
 	want := map[string]App{
-		"my-wiki": {Upstream: "172.17.0.2:3000", Unsupported: true},
-		"web":     {Upstream: "172.17.0.3:80", Unsupported: true},
+		"my-wiki": {Upstream: "172.17.0.2:3000", Unsupported: true, Image: "someone/app"},
+		"web":     {Upstream: "172.17.0.3:80", Unsupported: true, Image: "someone/app"},
 	}
 	if !maps.Equal(r.apps, want) {
 		t.Errorf("got %v, want %v", r.apps, want)
+	}
+}
+
+// On a Docker network, the local page must know the gateways: Docker's
+// port proxy hands visitors on from them. On host networking, none.
+func TestGateways(t *testing.T) {
+	host, _ := os.Hostname()
+	self := ""
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") != host || self == "" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, self)
+	})
+	sock := fakeDocker(t, mux)
+
+	for _, tt := range []struct{ name, self, want string }{
+		{"not a container", "", "[]"},
+		{"host networking", `{"HostConfig":{"NetworkMode":"host"},"NetworkSettings":{"Networks":{"host":{"Gateway":""}}}}`, "[]"},
+		{"bridge", `{"HostConfig":{"NetworkMode":"bridge"},"NetworkSettings":{"Networks":{"bridge":{"Gateway":"172.17.0.1","IPv6Gateway":"fd00::1"}}}}`, "[172.17.0.1 fd00::1]"},
+	} {
+		self = tt.self
+		gws, err := Gateways(t.Context(), sock)
+		if got := fmt.Sprint(gws); err != nil || got != tt.want {
+			t.Errorf("%s: %s %v, want %s", tt.name, got, err, tt.want)
+		}
+	}
+	if _, err := Gateways(t.Context(), filepath.Join(t.TempDir(), "missing.sock")); err == nil {
+		t.Error("no Docker: no error")
 	}
 }

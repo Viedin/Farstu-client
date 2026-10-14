@@ -285,7 +285,7 @@ func TestPage(t *testing.T) {
 		req.Host = host
 		req.RemoteAddr = remote
 		rec := httptest.NewRecorder()
-		guard(&p).ServeHTTP(rec, req)
+		guard(&p, nil).ServeHTTP(rec, req)
 		return rec.Code, rec.Body.String()
 	}
 
@@ -293,7 +293,7 @@ func TestPage(t *testing.T) {
 		t.Errorf("before a code: %s", body)
 	}
 	framing := httptest.NewRecorder()
-	guard(&p).ServeHTTP(framing, httptest.NewRequest("GET", "http://localhost:7080/", nil))
+	guard(&p, nil).ServeHTTP(framing, httptest.NewRequest("GET", "http://localhost:7080/", nil))
 	if framing.Header().Get("X-Frame-Options") != "DENY" {
 		t.Errorf("page can be framed: %v", framing.Header())
 	}
@@ -639,5 +639,62 @@ func TestFeedback(t *testing.T) {
 	sendErr = errors.New("Farstu Server unreachable")
 	if code := post("message=Nice"); code != http.StatusBadGateway {
 		t.Errorf("server down: %d", code)
+	}
+}
+
+// An unsupported app only has its container's name: another container
+// that takes the name, maybe a database page without a login, is not
+// routed in its place, while an update of the same image is.
+func TestReplacedContainerTurnsOff(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer up.Close()
+	addr := up.Listener.Addr().String()
+	rt := proxy.NewRouter()
+	get := func() int {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = "wiki.u.farstu.test"
+		rec := httptest.NewRecorder()
+		rt.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	path := filepath.Join(t.TempDir(), "apps.json")
+	u := Load(path, rt, "u.farstu.test")
+	wiki := discover.App{Upstream: addr, Unsupported: true, Image: "someone/wiki"}
+	u.SetApps(map[string]discover.App{"wiki": wiki}, nil)
+	if err := u.Set("wiki", true); err != nil || get() != 200 {
+		t.Fatalf("turn on: %v, HTTP %d", err, get())
+	}
+	u.SetApps(map[string]discover.App{}, nil) // updated: recreated
+	u.SetApps(map[string]discover.App{"wiki": wiki}, nil)
+	if get() != 200 {
+		t.Fatal("same image back, not routed")
+	}
+
+	u.SetApps(map[string]discover.App{"wiki": {Upstream: addr, Unsupported: true, Image: "someone/dbadmin"}}, nil)
+	if get() != 404 || u.isOn("wiki") {
+		t.Fatal("another image under the name still routed")
+	}
+	if b, _ := os.ReadFile(path); string(b) != "[]" {
+		t.Errorf("turned off but saved %s", b)
+	}
+	if body := page(u.handler()); !strings.Contains(body, "A different container now has the name wiki") {
+		t.Errorf("no notice: %s", body)
+	}
+}
+
+// Docker's port proxy forwards anyone, the internet too, from a private
+// gateway address: the page refuses it.
+func TestForwarderRefused(t *testing.T) {
+	var p Page
+	h := guard(&p, []netip.Addr{netip.MustParseAddr("172.17.0.1")})
+	for remote, want := range map[string]int{"172.17.0.1:5000": 403, "[::ffff:172.17.0.1]:5000": 403, "192.168.1.4:5000": 200} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = "192.168.1.10:7080"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("%s: HTTP %d, want %d", remote, rec.Code, want)
+		}
 	}
 }

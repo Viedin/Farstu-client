@@ -105,11 +105,14 @@ func (rt *Router) Enable(host, upstream string, logins []recipes.Login) {
 
 // identityHeaders are prefixes of the headers apps behind a sign-in proxy
 // (Authelia, authentik, oauth2-proxy, Tailscale, Cloudflare Access) take as
-// the signed-in user when they come from a trusted address. Every visitor
-// comes from ours, so a visitor's own would sign them in as anyone.
+// the signed-in user when they come from a trusted address, and those they
+// take as the visitor's IP (CDNs' and others'). Every visitor comes from
+// ours, so a visitor's own would sign them in as anyone, or let them pose
+// as any address to the app's own brute-force limit.
 var identityHeaders = []string{
 	"remote-", "x-remote-", "x-webauth-", "x-auth-request-", "x-authentik-", "tailscale-", "cf-access-",
 	"x-forwarded-user", "x-forwarded-email", "x-forwarded-preferred-username", "x-forwarded-groups", "x-forwarded-access-token",
+	"true-client-ip", "cf-connecting-ip", "x-client-ip", "x-cluster-client-ip", "fastly-client-ip",
 }
 
 // isIdentityHeader matches "_" as "-": Python servers read Remote_User as

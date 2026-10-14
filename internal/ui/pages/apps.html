@@ -29,15 +29,17 @@
 <script>
 // A starting app takes a while to answer, and an app just turned on
 // reconnects the tunnel and waits for its certificate: show only
-// "Checking…" until it is reachable, or still isn't after a minute.
-const check = (el, until) => fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
+// "Checking…" until it is reachable, or still isn't after a minute. Each
+// check asks Farstu Server, which limits them per address (shared with
+// neighbours behind the same one): wait longer each time.
+const check = (el, until, wait = 3000) => fetch("/apps/" + encodeURIComponent(el.dataset.app) + "/status")
   .then(r => r.json())
   .then(s => {
     if (!s.ok && s.text && Date.now() < until) throw "retry"
     el.textContent = s.text; el.className = "status " + (s.ok ? "ok" : "bad")
   })
   .catch(() => {
-    if (Date.now() < until) return setTimeout(() => check(el, until), 3000)
+    if (Date.now() < until) return setTimeout(() => check(el, until, Math.min(wait * 2, 15000)), wait)
     el.textContent = "Could not check this app"; el.className = "status bad"
   })
 // The other containers stay hidden until the warning above them is
