@@ -76,8 +76,8 @@ for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => {
     const t = document.createElement("textarea")
     t.value = b.dataset.copy; document.body.append(t); t.select(); document.execCommand("copy"); t.remove()
   }
-  b.classList.add("ok"); b.dataset.tip = "Copied"; showTip(b)
-  setTimeout(() => { b.classList.remove("ok"); b.dataset.tip = "Copy address" }, 1500)
+  b.classList.add("ok")
+  setTimeout(() => b.classList.remove("ok"), 1500)
 }
 </script>{{end}}
 
@@ -89,8 +89,8 @@ for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => {
 {{define "app"}}{{$reachable := and .On (not (or .Unchecked .Missing .Problem))}}<tr><td>
 <div class="name">{{.Name}}{{if .Unsupported}} <span class="tag">Unsupported</span>{{end}}</div>
 {{if $reachable}}<div class="links"><a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
-<button class="icon" type="button" data-tip="Copy address" aria-label="Copy address" data-copy="https://{{.Host}}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>
-<button class="icon" type="button" data-tip="QR code for your phone" aria-label="QR code for your phone" aria-expanded="false" data-qr><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M17 17h4v4h-4"/></svg></button></div>{{end}}
+<button class="icon" type="button" aria-label="Copy address" data-copy="https://{{.Host}}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>
+<button class="icon" type="button" aria-label="QR code for your phone" aria-expanded="false" data-qr><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M17 17h4v4h-4"/></svg></button></div>{{end}}
 </td><td class="fit">
 {{if .Unchecked}}<span class="chip" data-tip="Can't check whether it's running">Unknown</span><span class="why">Can't check whether it's running</span>
 {{else if .Missing}}<span class="chip bad" data-tip="Not running. Turns off by itself if it's not back within a day.">Not running</span><span class="why">Turns off by itself if it's not back within a day.</span>
