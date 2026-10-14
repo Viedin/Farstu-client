@@ -3,7 +3,8 @@ WORKDIR /src
 COPY go.* ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/farstu ./cmd/client
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/farstu ./cmd/client
 # distroless has no shell; create /data here.
 RUN mkdir -p /out/data
 

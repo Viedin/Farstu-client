@@ -30,6 +30,9 @@ import (
 	recipefs "github.com/viedin/farstu-client/recipes"
 )
 
+// version is the release tag, set by the image build (see Dockerfile).
+var version = "dev"
+
 // frpc forwards to this listener; it must stay on loopback.
 const listenPort = 8443
 
@@ -162,6 +165,9 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	toggles.Tunnel = func(ctx context.Context) error { return frpc.Tunnel(ctx, frpcConf) }
 	toggles.Probe = func(ctx context.Context, host string) (api.ProbeResponse, error) {
 		return control.Probe(ctx, server, dev.Token, host)
+	}
+	toggles.Feedback = func(ctx context.Context, message string) error {
+		return control.Feedback(ctx, server, dev.Token, api.Feedback{Message: message, Version: version})
 	}
 	page.Ready(toggles)
 

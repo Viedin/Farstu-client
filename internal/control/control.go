@@ -176,6 +176,18 @@ func Me(ctx context.Context, serverURL, token string) (api.Me, error) {
 	return m, nil
 }
 
+// Feedback sends what the user wrote to Farstu.
+func Feedback(ctx context.Context, serverURL, token string, f api.Feedback) error {
+	status, _, err := do(ctx, http.MethodPost, serverURL+"/v1/feedback", token, f)
+	if err != nil {
+		return fmt.Errorf("Farstu Server unreachable: %w", err)
+	}
+	if status != http.StatusNoContent {
+		return fmt.Errorf("Farstu Server refused it (HTTP %d)", status)
+	}
+	return nil
+}
+
 // do sends v as JSON (if not nil) with an optional bearer token.
 func do(ctx context.Context, method, url, token string, v any) (status int, body []byte, err error) {
 	var rd io.Reader

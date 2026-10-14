@@ -605,3 +605,39 @@ func TestPlanDowngrade(t *testing.T) {
 		t.Fatalf("free with no apps: %#v, want empty, not the wildcard", got)
 	}
 }
+
+func TestFeedback(t *testing.T) {
+	var sent string
+	var sendErr error
+	u := Load(filepath.Join(t.TempDir(), "apps.json"), proxy.NewRouter(), "u.farstu.test")
+	h := u.mux()
+	post := func(form string) int {
+		req := httptest.NewRequest("POST", "/feedback", strings.NewReader(form))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	page := func() string {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+		return rec.Body.String()
+	}
+	if strings.Contains(page(), "Send feedback") {
+		t.Error("form shown without a way to send it")
+	}
+	u.Feedback = func(_ context.Context, msg string) error { sent = msg; return sendErr }
+	if !strings.Contains(page(), "Send feedback") {
+		t.Error("form not shown")
+	}
+	if code := post("message=+"); code != http.StatusBadRequest || sent != "" {
+		t.Errorf("blank: %d, sent %q", code, sent)
+	}
+	if code := post("message=+Nice+"); code != http.StatusNoContent || sent != "Nice" {
+		t.Errorf("ok: %d, sent %q", code, sent)
+	}
+	sendErr = errors.New("Farstu Server unreachable")
+	if code := post("message=Nice"); code != http.StatusBadGateway {
+		t.Errorf("server down: %d", code)
+	}
+}

@@ -72,6 +72,7 @@ type UI struct {
 	Account   string // the account page on Farstu Server; empty hides the link
 	Tunnel    func(context.Context) error
 	Probe     func(ctx context.Context, host string) (api.ProbeResponse, error)
+	Feedback  func(ctx context.Context, message string) error // nil hides the form
 	// Restart reconnects frpc when Hosts changes. It must not block: it is
 	// called with u's lock held.
 	Restart func()
@@ -404,7 +405,8 @@ func (u *UI) mux() http.Handler {
 			Today                              string
 			SignIns                            bool
 			Plan, Notice                       string
-		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account, today, signIns, plan, notice})
+			Feedback                           bool
+		}{rows, others, problem, errMsg, strings.Join(u.Supported, ", "), u.Account, today, signIns, plan, notice, u.Feedback != nil})
 	}
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		render(w, http.StatusOK, "")
@@ -458,6 +460,20 @@ func (u *UI) mux() http.Handler {
 			return
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+	})
+	// Sent by the page's script, which shows the answer next to the form.
+	mux.HandleFunc("POST /feedback", func(w http.ResponseWriter, r *http.Request) {
+		msg := strings.TrimSpace(r.FormValue("message"))
+		if msg == "" || u.Feedback == nil {
+			http.Error(w, "Write something first", http.StatusBadRequest)
+			return
+		}
+		if err := u.Feedback(r.Context(), msg); err != nil {
+			slog.Warn("feedback not sent", "err", err)
+			http.Error(w, "Not sent: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
 }

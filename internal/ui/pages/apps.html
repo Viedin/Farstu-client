@@ -21,6 +21,11 @@
 {{with .Today}}<a class="card{{if $.SignIns}} error{{end}}" href="/activity">{{.}} →</a>{{end}}
 <p class="muted foot"><a href="/activity">Activity</a>: sign-ins and scans, last 30 days</p>
 {{with .Account}}<p class="muted foot"><a href="{{.}}" target="_blank" rel="noopener">Your Farstu account</a>: plan, password, disconnect this server</p>{{end}}
+{{if .Feedback}}<details><summary>Send feedback</summary>
+<form id="feedback" method="post" action="/feedback">
+<textarea name="message" required maxlength="5000" aria-label="Feedback" placeholder="What works, what doesn't, what you'd like"></textarea>
+<button class="button">Send</button> <span class="muted" role="status"></span>
+</form></details>{{end}}
 <script>
 // A starting app takes a while to answer, and an app just turned on
 // reconnects the tunnel and waits for its certificate: show only
@@ -42,6 +47,18 @@ if (accept) {
   const show = () => { accept.hidden = true; document.getElementById("others").hidden = false }
   try { if (localStorage.getItem("acceptedUnsupported")) show() } catch {}
   accept.onclick = () => { try { localStorage.setItem("acceptedUnsupported", "1") } catch {}; show() }
+}
+const fb = document.getElementById("feedback")
+if (fb) fb.onsubmit = e => {
+  e.preventDefault()
+  const out = fb.querySelector("[role=status]")
+  out.textContent = "Sending…"; out.className = "muted"
+  fetch("/feedback", {method: "POST", body: new URLSearchParams(new FormData(fb))})
+    .then(async r => {
+      if (!r.ok) throw await r.text()
+      fb.reset(); out.textContent = "Thanks, sent!"; out.className = "ok"
+    })
+    .catch(err => { out.textContent = typeof err == "string" ? err : "Not sent: no answer from this server"; out.className = "bad" })
 }
 for (const el of document.querySelectorAll("[data-app]")) check(el, Date.now() + 60000)
 for (const b of document.querySelectorAll("[data-qr]")) b.onclick = () => {

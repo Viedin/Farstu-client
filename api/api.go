@@ -70,6 +70,12 @@ type Me struct {
 	PaidUntil time.Time `json:"paid_until,omitzero"`
 }
 
+// POST /v1/feedback, authenticated like /v1/dns/txt; answered with 204.
+type Feedback struct {
+	Message string `json:"message"`           // 1-5000 characters
+	Version string `json:"version,omitempty"` // the client's, e.g. "v0.2.9"; at most 100 characters
+}
+
 // The device's one frps proxy, by plan. The relay only accepts these
 // (frpc prefixes the name with "<subdomain>."):
 //   - ProxyAll: customDomains ["*.<subdomain>.<domain>"]; paid plan only.
