@@ -415,12 +415,14 @@ func (u *UI) mux() http.Handler {
 	})
 	mux.HandleFunc("GET /activity", func(w http.ResponseWriter, r *http.Request) {
 		all := u.router.Activity()
+		today, signIns := u.today(all)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		pages.ExecuteTemplate(w, "activity", struct {
-			Visitors      []visitorRow
-			Days          []dayRow
-			Page, Account string
-		}{u.visitors(all), u.days(all), "activity", u.Account})
+			Visitors             []visitorRow
+			Days                 []dayRow
+			Page, Account, Today string
+			SignIns              bool
+		}{u.visitors(all), u.days(all), "activity", u.Account, today, signIns})
 	})
 	mux.HandleFunc("GET /favicon.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
@@ -536,7 +538,7 @@ func plural(n int, s string) string {
 	return fmt.Sprintf("%d %ss", n, s)
 }
 
-// today sums up today's activity for the apps page; empty if nothing needs
+// today sums up today's activity for the nav and the activity page; empty if nothing needs
 // seeing. signIns: someone failed to sign in.
 func (u *UI) today(all []proxy.Activity) (msg string, signIns bool) {
 	date := u.now().Format(time.DateOnly)

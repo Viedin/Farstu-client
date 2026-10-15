@@ -16,6 +16,8 @@ nav .brand{display:flex;align-items:center;gap:10px;color:inherit;font-size:20px
 nav .links a{padding:6px 12px;border-radius:8px;color:var(--muted);font-size:14px;font-weight:500;text-decoration:none}
 nav .links a:hover{color:var(--text);background:var(--line)}
 nav .links a[aria-current=page]{color:var(--text);background:var(--line)}
+nav .dot{display:inline-block;width:8px;height:8px;margin-left:6px;border-radius:50%;background:var(--bad);vertical-align:1px}
+nav .dot.warn{background:var(--warn)}
 nav a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 h2{font-size:18px;margin:32px 0 0}
 p{margin:8px 0}
@@ -94,7 +96,7 @@ addEventListener("scroll", hideTip, true)
 <a class="brand" href="/"><img src="/favicon.svg" alt="" width="28" height="28">Farstu</a>
 <div class="links">
 <a href="/"{{if eq .Page "apps"}} aria-current="page"{{end}}>Apps</a>
-<a href="/activity"{{if eq .Page "activity"}} aria-current="page"{{end}}>Activity</a>
+<a href="/activity"{{if eq .Page "activity"}} aria-current="page"{{end}}>Activity{{with .Today}}<span class="dot{{if not $.SignIns}} warn{{end}}" role="img" aria-label="{{.}}"></span>{{end}}</a>
 {{with .Account}}<a href="{{.}}" target="_blank" rel="noopener">Account ↗</a>{{end}}
 </div></nav>
 {{end}}

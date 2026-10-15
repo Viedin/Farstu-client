@@ -16,7 +16,6 @@
 </ul>
 <button class="button" type="button" id="accept">I understand the risks, show them</button>
 <div id="others" hidden>{{template "apps-table" .}}</div></details>{{end}}
-{{with .Today}}<a class="card{{if $.SignIns}} error{{end}}" href="/activity">{{.}} →</a>{{end}}
 {{if .Feedback}}<details><summary>Send feedback</summary>
 <form id="feedback" method="post" action="/feedback">
 <textarea name="message" required maxlength="5000" aria-label="Feedback" placeholder="What works, what doesn't, what you'd like"></textarea>

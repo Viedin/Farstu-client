@@ -375,11 +375,12 @@ func TestPage(t *testing.T) {
 		req.RemoteAddr = "192.0.2.1:1"
 		rt.ServeHTTP(httptest.NewRecorder(), req)
 	}
-	if _, body := get("localhost:7080", "/"); !strings.Contains(body, `<a class="card" href="/activity">Today: 1 visitor scanning →</a>`) ||
+	if _, body := get("localhost:7080", "/"); !strings.Contains(body, `<span class="dot warn" role="img" aria-label="Today: 1 visitor scanning"></span>`) ||
 		!strings.Contains(body, "</script>") { // rendered to the end
 		t.Errorf("today: %s", body)
 	}
-	if _, body := get("localhost:7080", "/activity"); !strings.Contains(body, `<td class="mono">192.0.2.1</td><td><span class="chip " data-tip="20 requests for names that aren&#39;t turned on" data-n="20">404 ×20</span>`) ||
+	if _, body := get("localhost:7080", "/activity"); !strings.Contains(body, `<p class="card" role="alert">Today: 1 visitor scanning</p>`) ||
+		!strings.Contains(body, `<td class="mono">192.0.2.1</td><td><span class="chip " data-tip="20 requests for names that aren&#39;t turned on" data-n="20">404 ×20</span>`) ||
 		!strings.Contains(body, "</script>") {
 		t.Errorf("activity page: %s", body)
 	}

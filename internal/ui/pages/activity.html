@@ -1,4 +1,5 @@
 {{define "activity"}}{{template "head"}}{{template "nav" .}}
+{{with .Today}}<p class="card{{if $.SignIns}} error{{end}}" role="alert">{{.}}</p>{{end}}
 <p class="muted">Sign-ins and requests for pages that don't exist, last 30 days. Every address on the internet gets scanned; visitors only reach apps you turned on.</p>
 {{if .Days}}<input class="search" type="search" placeholder="Search app, visitor or status" aria-label="Search activity">{{end}}
 {{with .Visitors}}<h2>Visitors</h2>
