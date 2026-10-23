@@ -1,0 +1,20 @@
+app: aiostreams
+match: { images: ["ghcr.io/viren070/aiostreams", "viren070/aiostreams"] }
+upstream_port: 3000
+# No first-visitor admin: users come from AIOSTREAMS_AUTH. But by default
+# anyone may create a configuration, and one can make the server fetch any
+# URL, the home network included (ALLOW_PRIVATE_URLS, on by default): wait
+# for creating one to need a login.
+setup_done:
+  path: /api/v1/status
+  field: data.settings.protected
+  message: AIOStreams lets anyone create a configuration, which can make it send requests into your home network. Add yourself to AIOSTREAMS_AUTH and set AIOSTREAMS_AUTH_REQUIRED=true first
+# Not covered: the rest of /api/v1/user and the built-in proxy take the
+# password with any request (basic auth), and the Jellyfin sign-in under
+# /jellyfin/<uuid>/..., /jellyfin/u/<alias>/... and /jellyfin/p/<code>/....
+login:
+  - { method: POST, path: /api/v1/auth/login }
+  - { method: GET, path: /api/v1/user } # opening a configuration
+  - { method: POST, path: /api/v1/user/session }
+  - { method: POST, path: /api/v1/user/verify }
+  - { method: POST, path: /jellyfin/Users/AuthenticateByName }

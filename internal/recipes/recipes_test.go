@@ -53,6 +53,8 @@ func TestRecipes(t *testing.T) {
 		"wechatopenai/weknora-ui:v0.5.0":                     "weknora",
 		"wechatopenai/weknora-app:v0.5.0":                    "",
 		"ghcr.io/runtipi/runtipi:v4.5.0":                     "runtipi",
+		"ghcr.io/viren070/aiostreams:latest":                 "aiostreams",
+		"viren070/aiostreams:v2.0.0":                         "aiostreams",
 		"localhost:5000/nextcloud:29":                        "",
 		"ghcr.io/immich-app/immich-machine-learning:release": "",
 		"sha256:0123abcd":                                    "",
