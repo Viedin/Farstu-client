@@ -202,9 +202,13 @@ func setupProblem(ctx context.Context, upstream string, r recipes.Recipe) string
 	case resp.StatusCode != want:
 		return unsure(fmt.Sprintf("HTTP %d", resp.StatusCode))
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	const maxBody = 4 << 20 // AIOStreams' status has every addon preset: 300 KB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return name + " is not answering yet"
+	}
+	if len(body) > maxBody {
+		return unsure("its answer is over 4 MB")
 	}
 	if !strings.Contains(string(body), s.Contains) {
 		return notDone

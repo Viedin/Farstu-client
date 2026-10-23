@@ -176,6 +176,8 @@ func TestSetupProblem(t *testing.T) {
 		{200, `<html>`, "", "Can't check whether Immich is set up (unexpected answer)"},
 		{500, `{"isInitialized":true}`, "", "Can't check whether Immich is set up (HTTP 500). If it has no admin account yet, create it from your home network first"},
 		{302, ``, "", "Can't check whether Immich is set up (HTTP 302)"},
+		{200, `{"isInitialized":true,"presets":"` + strings.Repeat("x", 300<<10) + `"}`, "", ""}, // as AIOStreams' status
+		{200, `{"isInitialized":true,"presets":"` + strings.Repeat("x", 4<<20) + `"}`, "", "Can't check whether Immich is set up (its answer is over 4 MB)"},
 		{200, `{"isInitialized":true}`, closed.Addr().String(), "Immich is not answering yet"},
 	} {
 		status, body = tt.status, tt.body
