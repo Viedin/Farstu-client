@@ -86,7 +86,8 @@ for (const b of document.querySelectorAll("[data-copy]")) b.onclick = () => {
 </table></div>{{end}}
 
 {{define "app"}}{{$reachable := and .On (not (or .Unchecked .Missing .Problem))}}<tr><td>
-<div class="name">{{.Name}}{{if .Unsupported}} <span class="tag">Unsupported</span>{{end}}</div>
+<div class="name">{{.Name}}{{if .Unsupported}} <span class="tag">Unsupported</span>{{end}}{{if .Update}} <span class="update" role="img" aria-label="Update available" data-tip="Update available: a newer version of its image is out. Update it the way you installed it, e.g. docker compose pull, then docker compose up -d."><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16V8M8 12l4-4 4 4"/></svg></span>{{end}}</div>
+{{if .Update}}<span class="why">A newer version of its image is out. Update it the way you installed it, e.g. docker compose pull, then docker compose up -d.</span>{{end}}
 {{if $reachable}}<div class="links"><a class="host" href="https://{{.Host}}" target="_blank" rel="noopener">{{.Host}}</a>
 <button class="icon" type="button" aria-label="Copy address" data-copy="https://{{.Host}}"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg></button>
 <button class="icon" type="button" aria-label="QR code for your phone" aria-expanded="false" data-qr><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M17 17h4v4h-4"/></svg></button></div>{{end}}

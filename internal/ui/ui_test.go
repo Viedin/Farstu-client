@@ -699,3 +699,16 @@ func TestForwarderRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateBadge(t *testing.T) {
+	u := Load(filepath.Join(t.TempDir(), "apps.json"), proxy.NewRouter(), "u.farstu.test")
+	u.SetApps(map[string]discover.App{"immich": {Upstream: "127.0.0.1:1", ImageID: "sha256:old"}}, nil)
+	u.SetUpdates(map[string]string{"immich": "sha256:old"})
+	if body := page(u.handler()); !strings.Contains(body, `aria-label="Update available"`) {
+		t.Errorf("no badge for an outdated image: %s", body)
+	}
+	u.SetApps(map[string]discover.App{"immich": {Upstream: "127.0.0.1:1", ImageID: "sha256:new"}}, nil) // updated
+	if body := page(u.handler()); strings.Contains(body, `aria-label="Update available"`) {
+		t.Errorf("badge after updating: %s", body)
+	}
+}

@@ -53,7 +53,7 @@ func watchResults(t *testing.T, sock string) <-chan result {
 
 func TestWatch(t *testing.T) {
 	fakeApps(t, `{"isInitialized":true,"installed":true}`)
-	immich := `{"Image":"ghcr.io/immich-app/immich-server:release","HostConfig":{"NetworkMode":"immich_default"},
+	immich := `{"Image":"ghcr.io/immich-app/immich-server:release","ImageID":"sha256:i1","HostConfig":{"NetworkMode":"immich_default"},
 		"NetworkSettings":{"Networks":{"immich_default":{"IPAddress":"172.18.0.5"},"a_unused":{"IPAddress":""}}},
 		"Ports":[{"PrivatePort":2283}]}`
 	others := `{"Image":"nextcloud:apache","HostConfig":{"NetworkMode":"host"},"NetworkSettings":{"Networks":{"host":{"IPAddress":""}}}},
@@ -93,7 +93,7 @@ func TestWatch(t *testing.T) {
 	}
 
 	// The fpm variant doesn't listen on the recipe's port and is skipped.
-	next(map[string]App{"immich": {Upstream: "172.18.0.5:2283"}, "nextcloud": {Upstream: "127.0.0.1:80"}}, "first listing")
+	next(map[string]App{"immich": {Upstream: "172.18.0.5:2283", ImageID: "sha256:i1"}, "nextcloud": {Upstream: "127.0.0.1:80"}}, "first listing")
 
 	set := func(s string) {
 		mu.Lock()
@@ -105,8 +105,8 @@ func TestWatch(t *testing.T) {
 	next(map[string]App{"nextcloud": {Upstream: "127.0.0.1:80"}}, "after immich died")
 
 	// Its tag pulled anew: the listing shows an image ID.
-	set(`[{"Id":"repulled","Image":"sha256:0123","NetworkSettings":{"Networks":{"x":{"IPAddress":"172.18.0.9"}}}}]`)
-	next(map[string]App{"immich": {Upstream: "172.18.0.9:2283"}}, "re-pulled image")
+	set(`[{"Id":"repulled","Image":"sha256:0123","ImageID":"sha256:0123","NetworkSettings":{"Networks":{"x":{"IPAddress":"172.18.0.9"}}}}]`)
+	next(map[string]App{"immich": {Upstream: "172.18.0.9:2283", ImageID: "sha256:0123"}}, "re-pulled image")
 
 	// A second copy: neither is used.
 	set("[" + immich + "," + immich + "]")
@@ -317,7 +317,7 @@ func TestSetupChecks(t *testing.T) {
 // them could reach this client's page or another app's switch.
 func TestWatchUnsupported(t *testing.T) {
 	ct := func(name, ip, ports string) string {
-		return `{"Names":["/` + name + `"],"Image":"someone/app:1","HostConfig":{"NetworkMode":"bridge"},
+		return `{"Names":["/` + name + `"],"Image":"someone/app:1","ImageID":"sha256:u1","HostConfig":{"NetworkMode":"bridge"},
 			"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"` + ip + `"}}},"Ports":[` + ports + `]}`
 	}
 	tcp := func(p int) string { return fmt.Sprintf(`{"PrivatePort":%d,"Type":"tcp"}`, p) }
@@ -351,8 +351,8 @@ func TestWatchUnsupported(t *testing.T) {
 	delete(r.apps, "gitlike")
 	delete(r.apps, "dup-a")
 	want := map[string]App{
-		"my-wiki": {Upstream: "172.17.0.2:3000", Unsupported: true, Image: "someone/app"},
-		"web":     {Upstream: "172.17.0.3:80", Unsupported: true, Image: "someone/app"},
+		"my-wiki": {Upstream: "172.17.0.2:3000", Unsupported: true, Image: "someone/app", ImageID: "sha256:u1"},
+		"web":     {Upstream: "172.17.0.3:80", Unsupported: true, Image: "someone/app", ImageID: "sha256:u1"},
 	}
 	if !maps.Equal(r.apps, want) {
 		t.Errorf("got %v, want %v", r.apps, want)
@@ -387,5 +387,73 @@ func TestGateways(t *testing.T) {
 	}
 	if _, err := Gateways(t.Context(), filepath.Join(t.TempDir(), "missing.sock")); err == nil {
 		t.Error("no Docker: no error")
+	}
+}
+
+func TestUpdates(t *testing.T) {
+	rs, err := recipes.Load(recipefs.FS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ct := func(name, image, id, ports string) string {
+		return `{"Names":["/` + name + `"],"Image":"` + image + `","ImageID":"` + id + `",
+			"NetworkSettings":{"Networks":{"bridge":{"IPAddress":"172.17.0.9"}}},"Ports":[` + ports + `]}`
+	}
+	port := `{"PrivatePort":80,"Type":"tcp"}`
+	running := "[" + strings.Join([]string{
+		ct("app1", "ghcr.io/x/app:1", "sha256:a1", port),
+		ct("app2", "ghcr.io/x/app:1", "sha256:a1", port),            // same image: asked once
+		ct("pinned", "ghcr.io/x/app@sha256:old", "sha256:a1", port), // same image, pinned
+		ct("web", "nginx", "sha256:b1", port),
+		ct("retag", "homeapp:prod", "sha256:b1", port), // nginx tagged anew here
+		ct("mine", "mine:dev", "sha256:c1", port),      // built here
+		ct("private", "ghcr.io/x/private:1", "sha256:d1", port),
+		ct("byid", "f1", "sha256:f1aa", port),
+		ct("db", "postgres:16", "sha256:p1", ""), // no port: not listed
+	}, ",") + "]"
+	digests := map[string]string{
+		"sha256:a1": `"ghcr.io/x/app@sha256:old"`, "sha256:b1": `"docker.io/library/nginx@sha256:cur"`, "sha256:c1": ``,
+		"sha256:d1": `"ghcr.io/x/private@sha256:old"`, "sha256:f1aa": `"f@sha256:any"`, "sha256:p1": `"postgres@sha256:old"`,
+	}
+	var mu sync.Mutex
+	asked := map[string]int{} // registry asks by image reference
+	down := false             // the private registry
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/json", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, running) })
+	mux.HandleFunc("GET /images/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"RepoDigests":[%s]}`, digests[r.PathValue("id")])
+	})
+	mux.HandleFunc("GET /distribution/", func(w http.ResponseWriter, r *http.Request) {
+		ref := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/distribution/"), "/json")
+		mu.Lock()
+		defer mu.Unlock()
+		asked[ref]++
+		switch {
+		case ref == "nginx":
+			fmt.Fprint(w, `{"Descriptor":{"digest":"sha256:cur"}}`)
+		case ref == "ghcr.io/x/private:1" && down:
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			fmt.Fprint(w, `{"Descriptor":{"digest":"sha256:new"}}`)
+		}
+	})
+	c := docker(fakeDocker(t, mux))
+	want := map[string]string{"app1": "sha256:a1", "app2": "sha256:a1", "private": "sha256:d1"}
+
+	got, last, err := updates(context.Background(), c, rs, nil)
+	if err != nil || !maps.Equal(got, want) {
+		t.Errorf("outdated %v, %v; want %v", got, err, want)
+	}
+	// Never for one pinned, built or retagged here, run by ID, or not listed.
+	mu.Lock()
+	if wantAsked := map[string]int{"ghcr.io/x/app:1": 1, "nginx": 1, "ghcr.io/x/private:1": 1}; !maps.Equal(asked, wantAsked) {
+		t.Errorf("registry asked %v, want %v", asked, wantAsked)
+	}
+	down = true
+	mu.Unlock()
+
+	// A registry that can't be asked keeps its last verdict.
+	if got, _, err := updates(context.Background(), c, rs, last); err != nil || !maps.Equal(got, want) {
+		t.Errorf("registry down: outdated %v, %v; want %v", got, err, want)
 	}
 }

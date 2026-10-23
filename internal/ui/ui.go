@@ -38,6 +38,7 @@ type App struct {
 	// Unsupported: no recipe; the page warns Farstu can't vouch it's safe.
 	Unsupported bool
 	Image       string // an unsupported app's image repository
+	ImageID     string // the image it runs
 }
 
 // An app that is on and gone this long was uninstalled, not updated: it is
@@ -65,7 +66,8 @@ type UI struct {
 	notice     string               // apps the plan or a replaced container turned off
 	// Images of the unsupported apps that are on: one only has a name, so
 	// another container taking it must not be routed in its place.
-	images map[string]string
+	images   map[string]string
+	outdated map[string]string // apps with a newer image out, as the ID of the one they ran (SetUpdates)
 	// ponytail: goneSince and images live in memory, so a client restart
 	// restarts the clock and trusts the first container seen by the name;
 	// persist them if restarts during an uninstall turn out to matter.
@@ -148,7 +150,7 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 	apps := []App{}
 	for _, n := range slices.Sorted(maps.Keys(running)) {
 		r := running[n]
-		apps = append(apps, App{Name: n, Host: n + "." + u.zone, Upstream: r.Upstream, Problem: r.Problem, Unsupported: r.Unsupported, Image: r.Image})
+		apps = append(apps, App{Name: n, Host: n + "." + u.zone, Upstream: r.Upstream, Problem: r.Problem, Unsupported: r.Unsupported, Image: r.Image, ImageID: r.ImageID})
 	}
 	now, forgot := u.now(), false
 	var replaced []string
@@ -193,6 +195,15 @@ func (u *UI) SetApps(running map[string]discover.App, err error) {
 		}
 		u.restart()
 	}
+}
+
+// SetUpdates takes the apps whose image has a newer one out, by name, as
+// the ID of the image each ran. The page marks them until they run another
+// image; nothing else changes.
+func (u *UI) SetUpdates(outdated map[string]string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.outdated = outdated
 }
 
 // Set turns an app on or off and saves it. Off takes effect in the router
@@ -378,13 +389,14 @@ func (u *UI) mux() http.Handler {
 			App
 			On, Missing bool
 			Unchecked   bool // missing while Docker can't be asked
+			Update      bool // its image has a newer one out
 		}
 		u.mu.Lock()
 		// Apps: supported or on. Others: unsupported and off, folded away
 		// so a server's databases and helpers don't bury the apps.
 		var rows, others []row
 		for _, a := range u.apps {
-			if r := (row{App: a, On: u.isOn(a.Name)}); a.Unsupported && !r.On {
+			if r := (row{App: a, On: u.isOn(a.Name), Update: a.ImageID != "" && u.outdated[a.Name] == a.ImageID}); a.Unsupported && !r.On {
 				others = append(others, r)
 			} else {
 				rows = append(rows, r)

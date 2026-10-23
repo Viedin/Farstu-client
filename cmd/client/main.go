@@ -189,6 +189,7 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	})
 	spawn(func() error { return watchPlan(ctx, server, dev.Token, toggles, planKnown) })
 	spawn(func() error { discover.Watch(ctx, dockerSock, rs, toggles.SetApps); return nil })
+	spawn(func() error { discover.WatchUpdates(ctx, dockerSock, rs, toggles.SetUpdates); return nil })
 	slog.Info("farstu client started", "address", "*."+dev.Subdomain+"."+dev.Domain)
 	<-ctx.Done()
 	return nil

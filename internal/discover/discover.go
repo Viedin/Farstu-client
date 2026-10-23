@@ -35,6 +35,7 @@ type App struct {
 	// asks every visitor for a password.
 	Unsupported bool
 	Image       string // an unsupported app's image repository, e.g. "someone/app"
+	ImageID     string // the image it runs, e.g. "sha256:…"; see WatchUpdates
 }
 
 // Watch calls found with the apps running now, by name, and again whenever
@@ -139,7 +140,7 @@ func watch(ctx context.Context, c *http.Client, rs []recipes.Recipe, found func(
 		}
 	}()
 	for {
-		apps, err := list(ctx, c, rs)
+		apps, _, err := list(ctx, c, rs)
 		if err != nil {
 			return err
 		}
@@ -263,6 +264,7 @@ type container struct {
 	ID         string   // JSON field names match case-insensitively
 	Names      []string // e.g. "/immich_server"
 	Image      string
+	ImageID    string
 	HostConfig struct {
 		NetworkMode string
 	}
@@ -277,14 +279,16 @@ type portMapping struct {
 	Type        string // "tcp", "udp"
 }
 
-func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]App, error) {
+// list returns the apps running now by name, and the image each was
+// created from, e.g. "ghcr.io/immich-app/immich-server:release".
+func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (apps map[string]App, refs map[string]string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var cs []container
 	if err := getJSON(ctx, c, "/containers/json", &cs); err != nil { // running only
-		return nil, err
+		return nil, nil, err
 	}
-	apps := map[string]App{}
+	apps, refs = map[string]App{}, map[string]string{}
 	var unknown []container
 	for _, ct := range cs {
 		image, err := imageName(ctx, c, ct)
@@ -307,7 +311,8 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]
 			continue
 		}
 		if ip := address(ct); ip != "" {
-			apps[r.App] = App{Upstream: net.JoinHostPort(ip, strconv.Itoa(r.UpstreamPort))}
+			apps[r.App] = App{Upstream: net.JoinHostPort(ip, strconv.Itoa(r.UpstreamPort)), ImageID: ct.ImageID}
+			refs[r.App] = image
 		}
 	}
 	self := ownIPs()
@@ -319,9 +324,9 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (map[string]
 		if _, dup := apps[name]; dup { // e.g. "my_app" and "my-app"
 			a = App{Unsupported: true, Problem: "More than one container is named " + name + "; rename one"}
 		}
-		apps[name] = a
+		apps[name], refs[name] = a, ct.Image
 	}
-	return apps, nil
+	return apps, refs, nil
 }
 
 // unsupported makes an app of a container no recipe knows: named after the
@@ -355,9 +360,9 @@ func unsupported(ct container, rs []recipes.Recipe, self map[string]bool) (strin
 	case slices.Contains(ports, 80):
 		port = 80
 	default:
-		return name, App{Unsupported: true, Image: recipes.Repo(ct.Image), Problem: fmt.Sprintf("It listens on several ports %v; Farstu can't tell which one is its web page", ports)}, true
+		return name, App{Unsupported: true, Image: recipes.Repo(ct.Image), ImageID: ct.ImageID, Problem: fmt.Sprintf("It listens on several ports %v; Farstu can't tell which one is its web page", ports)}, true
 	}
-	return name, App{Upstream: net.JoinHostPort(ip, strconv.Itoa(port)), Unsupported: true, Image: recipes.Repo(ct.Image)}, true
+	return name, App{Upstream: net.JoinHostPort(ip, strconv.Itoa(port)), Unsupported: true, Image: recipes.Repo(ct.Image), ImageID: ct.ImageID}, true
 }
 
 // hostLabel turns a container name into a DNS label: "/Immich_Server" is
@@ -400,6 +405,113 @@ func imageName(ctx context.Context, c *http.Client, ct container) (string, error
 	var inspect struct{ Config struct{ Image string } }
 	err := getJSON(ctx, c, "/containers/"+url.PathEscape(ct.ID)+"/json", &inspect)
 	return inspect.Config.Image, err
+}
+
+// WatchUpdates asks the registries updateAfter after start, then every
+// updateEvery. Docker Hub counts each ask as a pull against its anonymous
+// limit, per 6 hours, which the user's own pulls share: the delay keeps a
+// client that restarts in a loop from using it up.
+// ponytail: the last check is kept in memory; persist its time if clients
+// restarting slower than updateAfter turn out to exhaust the limit.
+const (
+	updateAfter = 10 * time.Minute
+	updateEvery = 6 * time.Hour
+)
+
+// WatchUpdates calls found with the listed apps whose image has a newer
+// one in its registry, as the ID of the image each runs, until ctx is
+// done. Docker asks the registries, anonymously. It only tells: it never
+// pulls or restarts anything.
+func WatchUpdates(ctx context.Context, socket string, rs []recipes.Recipe, found func(outdated map[string]string)) {
+	c := docker(socket)
+	// Docker answers once the registry has, after a few round trips of its own.
+	c.Transport.(*http.Transport).ResponseHeaderTimeout = time.Minute
+	var last map[appImage]bool
+	for wait := updateAfter; ; {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		outdated, checked, err := updates(ctx, c, rs, last)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			slog.Warn("can't check apps for updates, retrying", "err", err)
+			wait = time.Minute
+			continue
+		}
+		last, wait = checked, updateEvery
+		found(outdated)
+	}
+}
+
+// appImage is an image as an app runs it: ref says which tag, if any, it follows.
+type appImage struct{ ref, id string }
+
+// updates checks the image of each listed app, once per ref and ID, and
+// returns the outdated apps with their image ID, and every verdict. Where
+// the registry can't be asked, the verdict in last stands; failures are
+// logged.
+func updates(ctx context.Context, c *http.Client, rs []recipes.Recipe, last map[appImage]bool) (map[string]string, map[appImage]bool, error) {
+	apps, refs, err := list(ctx, c, rs)
+	if err != nil {
+		return nil, nil, err
+	}
+	outdated, checked := map[string]string{}, map[appImage]bool{}
+	for name, a := range apps {
+		if a.ImageID == "" {
+			continue // e.g. two containers for one name
+		}
+		img := appImage{refs[name], a.ImageID}
+		n, ok := checked[img]
+		if !ok {
+			var err error
+			if n, err = newer(ctx, c, img.ref, img.id); ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			} else if err != nil {
+				slog.Warn("can't check an image for updates", "app", name, "image", img.ref, "err", err)
+				n = last[img]
+			}
+			checked[img] = n
+		}
+		if n {
+			outdated[name] = a.ImageID
+		}
+	}
+	return outdated, checked, nil
+}
+
+// newer reports whether the registry has another image for ref's tag than
+// the local image id was pulled as. False without asking for an image
+// pinned to a digest, or that ref's registry never had: built, loaded or
+// retagged here, or run by ID.
+func newer(ctx context.Context, c *http.Client, ref, id string) (bool, error) {
+	if strings.Contains(ref, "@") {
+		return false, nil
+	}
+	var img struct{ RepoDigests []string } // e.g. "ghcr.io/immich-app/immich-server@sha256:…"
+	if err := getJSON(ctx, c, "/images/"+url.PathEscape(id)+"/json", &img); err != nil {
+		return false, err
+	}
+	var pulled []string // as ref's repository
+	for _, d := range img.RepoDigests {
+		if repo, digest, ok := strings.Cut(d, "@"); ok && recipes.Repo(repo) == recipes.Repo(ref) {
+			pulled = append(pulled, digest)
+		}
+	}
+	if len(pulled) == 0 {
+		return false, nil
+	}
+	var dist struct{ Descriptor struct{ Digest string } }
+	if err := getJSON(ctx, c, "/distribution/"+ref+"/json", &dist); err != nil { // unescaped, as the docker CLI does
+		return false, fmt.Errorf("ask its registry: %w", err)
+	}
+	if dist.Descriptor.Digest == "" {
+		return false, errors.New("its registry sent no digest")
+	}
+	return !slices.Contains(pulled, dist.Descriptor.Digest), nil
 }
 
 // exposes reports whether the container listens on port, e.g. not an

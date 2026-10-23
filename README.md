@@ -97,6 +97,10 @@ visitor ──TLS──▶ relay (stock frps, routes on SNI, never decrypts)
   start/die events), matching `recipes/*.yaml` against image names. Other
   containers with a TCP port are listed as unsupported, named after the
   container, at that port (80 if several, else none is guessed).
+- **Updates:** 10 minutes after start and every 6 hours, Docker asks the
+  registry of each listed app's image, anonymously, for its tag's current
+  digest; the local page marks apps whose image has a newer one. It never
+  pulls or restarts anything.
 - **Tunnel:** a pinned [frp](https://github.com/fatedier/frp) `frpc` runs as
   a subprocess with one `https` proxy and PROXY v2: for `*.<user>.<ourdomain>`
   on a paid plan, for the hosts of the apps that are on on the free plan (the
