@@ -202,6 +202,65 @@ func TestWatchNotSetUp(t *testing.T) {
 	}
 }
 
+// An app on another container's network (network_mode: service:vpn), by
+// ID, name or a chain of them, is reached at that one's address if its
+// image exposes the recipe's port, or none. While that one isn't running,
+// or restarted after the app, which then has no network, it says so.
+func TestWatchSharedNetwork(t *testing.T) {
+	fakeApps(t, `{"isInitialized":true,"installed":true,"data":{"settings":{"protected":true}}}`)
+	vpn := `{"Id":"vpn1","Name":"/vpn","State":{"Running":true,"StartedAt":"2026-10-01T10:00:00Z"},
+		"HostConfig":{"NetworkMode":"media_default"},"NetworkSettings":{"Networks":{"media_default":{"IPAddress":"172.18.0.2"}}}}`
+	inspect := map[string]string{"vpn1": vpn, "vpn": vpn}
+	running := []string{`{"Id":"vpn1","Names":["/vpn"],"Image":"qmcgaw/gluetun","HostConfig":{"NetworkMode":"media_default"},
+		"NetworkSettings":{"Networks":{"media_default":{"IPAddress":"172.18.0.2"}}},"Ports":[{"PrivatePort":3000,"Type":"tcp"},{"PrivatePort":8000,"Type":"tcp"}]}`}
+	// Docker lists no networks or ports for these; inspecting them shows what their image exposes.
+	shared := func(name, image, network, started, exposed string) {
+		mode := `"HostConfig":{"NetworkMode":"container:` + network + `"}`
+		running = append(running, `{"Id":"`+name+`","Names":["/`+name+`"],"Image":"`+image+`",`+mode+`,"NetworkSettings":{"Networks":{}}}`)
+		inspect[name] = `{"Id":"` + name + `","Name":"/` + name + `","State":{"Running":true,"StartedAt":"2026-10-01T` + started + `Z"},` +
+			mode + `,"Config":{"ExposedPorts":{` + exposed + `}}}`
+	}
+	shared("aiostreams", "ghcr.io/viren070/aiostreams:latest", "vpn1", "11:00:00", `"3000/tcp":{}`)
+	shared("immich", "ghcr.io/immich-app/immich-server:release", "vpn", "11:00:00", "")
+	shared("sidecar", "someone/sidecar", "vpn1", "11:00:00", "")
+	shared("nextcloud", "nextcloud:apache", "sidecar", "12:00:00", `"80/tcp":{}`)
+	shared("nextcloud-fpm", "nextcloud:fpm", "vpn1", "11:00:00", `"9000/tcp":{}`)
+	shared("prowlarr", "someone/prowlarr", "vpn1", "11:00:00", `"9696/tcp":{}`)
+	shared("jellyfin", "jellyfin/jellyfin", "gone", "11:00:00", "")
+	shared("byparr", "someone/byparr", "gone", "11:00:00", `"8191/tcp":{}`)
+	shared("vaultwarden", "vaultwarden/server", "vpn1", "09:00:00", "") // before vpn restarted
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /containers/json", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "["+strings.Join(running, ",")+"]")
+	})
+	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+		if c, ok := inspect[r.PathValue("id")]; ok {
+			fmt.Fprint(w, c)
+		} else {
+			http.NotFound(w, r)
+		}
+	})
+	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	r := <-watchResults(t, fakeDocker(t, mux))
+	want := map[string]App{
+		"aiostreams":  {Upstream: "172.18.0.2:3000"},
+		"immich":      {Upstream: "172.18.0.2:2283"},
+		"nextcloud":   {Upstream: "172.18.0.2:80"}, // through sidecar; not the fpm one
+		"prowlarr":    {Upstream: "172.18.0.2:9696", Unsupported: true, Image: "someone/prowlarr"},
+		"jellyfin":    {Problem: "jellyfin uses the network of container gone, which isn't running"},
+		"byparr":      {Unsupported: true, Image: "someone/byparr", Problem: "byparr uses the network of container gone, which isn't running"},
+		"vaultwarden": {Problem: "vaultwarden lost its network when container vpn restarted: restart vaultwarden"},
+		"vpn":         {Unsupported: true, Image: "qmcgaw/gluetun", Problem: "It listens on several ports [3000 8000]; Farstu can't tell which one is its web page"},
+	}
+	if r.err != nil || !maps.Equal(r.apps, want) {
+		t.Fatalf("got %v %v, want %v", r.apps, r.err, want)
+	}
+}
+
 // Each shipped recipe's check, against answers like the real app's: set up
 // or not, and fail closed on anything else.
 func TestSetupChecks(t *testing.T) {

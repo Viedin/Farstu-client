@@ -271,7 +271,8 @@ type container struct {
 	NetworkSettings struct {
 		Networks map[string]struct{ IPAddress string }
 	}
-	Ports []portMapping
+	Ports   []portMapping
+	problem string // user-facing; see shared
 }
 
 type portMapping struct {
@@ -296,6 +297,10 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (apps map[st
 			slog.Warn("container image unknown, skipped", "container", ct.ID, "err", err) // e.g. removed meanwhile
 			continue
 		}
+		if ct, err = shared(ctx, c, ct); err != nil {
+			slog.Warn("container network unknown, skipped", "container", ct.ID, "err", err) // e.g. removed meanwhile
+			continue
+		}
 		r, ok := recipes.Find(rs, image)
 		if !ok {
 			ct.Image = image // the name, also for a re-pulled tag
@@ -308,6 +313,10 @@ func list(ctx context.Context, c *http.Client, rs []recipes.Recipe) (apps map[st
 		if _, dup := apps[r.App]; dup {
 			// Picking one could put a fresh, unconfigured copy on the internet.
 			apps[r.App] = App{Problem: "More than one " + r.App + " container is running; stop the one you don't use"}
+			continue
+		}
+		if ct.problem != "" {
+			apps[r.App] = App{Problem: ct.problem}
 			continue
 		}
 		if ip := address(ct); ip != "" {
@@ -341,7 +350,7 @@ func unsupported(ct container, rs []recipes.Recipe, self map[string]bool) (strin
 	}
 	name := hostLabel(ct.Names[0])
 	ip := address(ct)
-	if name == "" || ip == "" || self[ip] || slices.ContainsFunc(rs, func(r recipes.Recipe) bool { return r.App == name }) {
+	if name == "" || ip == "" && ct.problem == "" || self[ip] || slices.ContainsFunc(rs, func(r recipes.Recipe) bool { return r.App == name }) {
 		return "", App{}, false
 	}
 	var ports []int
@@ -355,6 +364,8 @@ func unsupported(ct container, rs []recipes.Recipe, self map[string]bool) (strin
 	switch {
 	case len(ports) == 0:
 		return "", App{}, false
+	case ct.problem != "":
+		return name, App{Unsupported: true, Image: recipes.Repo(ct.Image), ImageID: ct.ImageID, Problem: ct.problem}, true
 	case len(ports) == 1:
 		port = ports[0]
 	case slices.Contains(ports, 80):
@@ -363,6 +374,69 @@ func unsupported(ct container, rs []recipes.Recipe, self map[string]bool) (strin
 		return name, App{Unsupported: true, Image: recipes.Repo(ct.Image), ImageID: ct.ImageID, Problem: fmt.Sprintf("It listens on several ports %v; Farstu can't tell which one is its web page", ports)}, true
 	}
 	return name, App{Upstream: net.JoinHostPort(ip, strconv.Itoa(port)), Unsupported: true, Image: recipes.Repo(ct.Image), ImageID: ct.ImageID}, true
+}
+
+// inspected is a container as Docker inspects it.
+type inspected struct {
+	container
+	Name  string // e.g. "/vpn"
+	State struct {
+		Running   bool
+		StartedAt time.Time
+	}
+	Config struct{ ExposedPorts map[string]struct{} } // e.g. "3000/tcp"
+}
+
+// shared resolves a container on another's network (network_mode:
+// service:vpn), by ID or name and along chains of them: it is reached at
+// the address of the container whose network it is, and listens on the
+// ports its image exposes, which Docker doesn't list for it. Its problem
+// is set while that one isn't running, or once it restarted after the
+// container, which then keeps a network nobody else is on. Other
+// containers are returned as they are.
+func shared(ctx context.Context, c *http.Client, ct container) (container, error) {
+	if !strings.HasPrefix(ct.HostConfig.NetworkMode, "container:") {
+		return ct, nil
+	}
+	var cur inspected
+	if err := getJSON(ctx, c, "/containers/"+url.PathEscape(ct.ID)+"/json", &cur); err != nil {
+		return ct, err
+	}
+	ct.Ports = nil
+	for p := range cur.Config.ExposedPorts {
+		port, proto, _ := strings.Cut(p, "/")
+		if n, err := strconv.Atoi(port); err == nil {
+			ct.Ports = append(ct.Ports, portMapping{PrivatePort: n, Type: proto})
+		}
+	}
+	for range 8 { // Docker can't make a loop of them
+		ref, ok := strings.CutPrefix(cur.HostConfig.NetworkMode, "container:")
+		if !ok {
+			ct.HostConfig, ct.NetworkSettings = cur.HostConfig, cur.NetworkSettings
+			return ct, nil
+		}
+		name := strings.TrimPrefix(cur.Name, "/")
+		var owner inspected
+		err := getJSON(ctx, c, "/containers/"+url.PathEscape(ref)+"/json", &owner)
+		if len(ref) == 64 {
+			ref = ref[:12] // an ID, as docker ps shows it
+		}
+		who := cmp.Or(strings.TrimPrefix(owner.Name, "/"), ref)
+		switch {
+		case errors.Is(err, statusError(http.StatusNotFound)) || err == nil && !owner.State.Running:
+			ct.problem = name + " uses the network of container " + who + ", which isn't running"
+		case err != nil:
+			ct.problem = "Can't tell whose network " + name + " uses: " + err.Error()
+		case cur.State.StartedAt.Before(owner.State.StartedAt):
+			ct.problem = name + " lost its network when container " + who + " restarted: restart " + name
+		default:
+			cur = owner
+			continue
+		}
+		return ct, nil
+	}
+	ct.problem = "Can't tell whose network it uses: too many containers in between"
+	return ct, nil
 }
 
 // hostLabel turns a container name into a DNS label: "/Immich_Server" is
