@@ -75,27 +75,45 @@ func docker(socket string) *http.Client {
 // runs on Docker networks rather than the host's. Docker's port proxy (for
 // IPv6, localhost, and in rootless Docker) hands every visitor of a
 // published port on, the internet's too, from a gateway: a private address.
-// None on host networking, outside Docker, or with a container hostname
-// other than its ID, which Docker's own is.
+// None on host networking or outside Docker. Unknown container networking
+// is an error: treating a port proxy as a LAN visitor would expose the UI.
 func Gateways(ctx context.Context, socket string) ([]netip.Addr, error) {
 	id, err := os.Hostname()
 	if err != nil {
 		return nil, err
 	}
+	inContainer := false
+	for _, path := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(path); err == nil {
+			inContainer = true
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	return gateways(ctx, docker(socket), id, inContainer)
+}
+
+func gateways(ctx context.Context, c *http.Client, hostname string, inContainer bool) ([]netip.Addr, error) {
 	var self struct {
+		ID              string
 		HostConfig      struct{ NetworkMode string }
 		NetworkSettings struct {
 			Networks map[string]struct{ Gateway, IPv6Gateway string }
 		}
 	}
-	err = getJSON(ctx, docker(socket), "/containers/"+url.PathEscape(id)+"/json", &self)
-	if errors.Is(err, statusError(http.StatusNotFound)) {
-		return nil, nil // not a container Docker knows by this name: the host's
+	err := getJSON(ctx, c, "/containers/"+url.PathEscape(hostname)+"/json", &self)
+	if !inContainer && errors.Is(err, statusError(http.StatusNotFound)) {
+		return nil, nil // a native process, not a container with a custom hostname
 	}
 	if err != nil {
 		return nil, err
+	}
+	// A custom hostname may name an unrelated container. Require Docker's
+	// default ID hostname before trusting its network settings.
+	if inContainer && ((len(hostname) != 12 && len(hostname) != 64) || !strings.HasPrefix(self.ID, hostname)) {
+		return nil, errors.New("can't identify this container; keep Docker's default hostname (remove hostname from compose)")
 	}
 	if self.HostConfig.NetworkMode == "host" {
 		return nil, nil
@@ -103,10 +121,18 @@ func Gateways(ctx context.Context, socket string) ([]netip.Addr, error) {
 	var gws []netip.Addr
 	for _, n := range self.NetworkSettings.Networks {
 		for _, g := range []string{n.Gateway, n.IPv6Gateway} {
-			if ip, err := netip.ParseAddr(g); err == nil {
-				gws = append(gws, ip)
+			if g == "" {
+				continue
 			}
+			ip, err := netip.ParseAddr(g)
+			if err != nil {
+				return nil, fmt.Errorf("Docker gateway %q: %w", g, err)
+			}
+			gws = append(gws, ip.Unmap())
 		}
+	}
+	if len(gws) == 0 {
+		return nil, errors.New("Docker reported no gateway for this container")
 	}
 	return gws, nil
 }

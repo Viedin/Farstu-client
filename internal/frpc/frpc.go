@@ -41,6 +41,8 @@ type Config struct {
 // certPath is where Run writes the relay's cert for frpc.
 func certPath(c Config) string { return filepath.Join(filepath.Dir(c.ConfigPath), "relay.pem") }
 
+func tokenPath(c Config) string { return filepath.Join(filepath.Dir(c.ConfigPath), "relay.token") }
+
 // Render returns frpc's TOML config: TLS to the relay verified against its
 // pinned cert, one https proxy for c.Hosts (none for no hosts), forwarded
 // with PROXY v2 to the local TLS listener, and the admin API on loopback.
@@ -75,11 +77,16 @@ localPort = %d
 transport.proxyProtocolVersion = "v2"
 `, name, domains, c.LocalPort)
 	}
-	// Values come from our server; %q is valid TOML for these plain ASCII strings.
+	// The file token source sends our device credential on every work connection;
+	// the relay's plugin authenticates it. frp's shared encryption token stays empty.
 	return fmt.Sprintf(`serverAddr = %q
 serverPort = %s
 transport.tls.enable = true
 transport.tls.trustedCaFile = %q
+auth.method = "oidc"
+auth.additionalScopes = ["NewWorkConns"]
+auth.oidc.tokenSource.type = "file"
+auth.oidc.tokenSource.file.path = %q
 user = %q
 metadatas.token = %q
 loginFailExit = false
@@ -89,7 +96,7 @@ webServer.addr = "127.0.0.1"
 webServer.port = %d
 webServer.user = "farstu"
 webServer.password = %q
-%s`, host, port, certPath(c), c.Subdomain, c.Token, c.AdminPort, c.AdminPassword, proxy), nil
+%s`, host, port, certPath(c), tokenPath(c), c.Subdomain, c.Token, c.AdminPort, c.AdminPassword, proxy), nil
 }
 
 // Run writes the config and keeps frpc running until ctx is done, then stops
@@ -115,7 +122,10 @@ func Run(ctx context.Context, c Config, restart <-chan struct{}) error {
 	if err := os.WriteFile(certPath(c), []byte(c.RelayCert), 0o600); err != nil {
 		return fmt.Errorf("write relay cert: %w", err)
 	}
-	cred, err := dropRoot(certPath(c), c.ConfigPath)
+	if err := os.WriteFile(tokenPath(c), []byte(c.Token), 0o600); err != nil {
+		return fmt.Errorf("write relay token: %w", err)
+	}
+	cred, err := dropRoot(certPath(c), tokenPath(c), c.ConfigPath)
 	if err != nil {
 		return err
 	}

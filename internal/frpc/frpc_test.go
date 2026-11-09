@@ -60,7 +60,14 @@ func TestRenderPinsRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"transport.tls.enable = true\n", `transport.tls.trustedCaFile = "/data/relay.pem"` + "\n"} {
+	for _, want := range []string{
+		"transport.tls.enable = true\n",
+		`transport.tls.trustedCaFile = "/data/relay.pem"` + "\n",
+		"auth.method = \"oidc\"\n",
+		"auth.additionalScopes = [\"NewWorkConns\"]\n",
+		"auth.oidc.tokenSource.type = \"file\"\n",
+		"auth.oidc.tokenSource.file.path = \"/data/relay.token\"\n",
+	} {
 		if !strings.Contains(conf, want) {
 			t.Errorf("config lacks %q:\n%s", want, conf)
 		}
@@ -71,8 +78,26 @@ func TestRenderPinsRelay(t *testing.T) {
 	}
 }
 
-func TestRunRestart(t *testing.T) {
+// frpc must traverse Go's private temp parent and write its test markers
+// after dropping root, just as it reaches its files under /data.
+func frpcTempDir(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
+	if os.Getuid() == 0 {
+		for _, path := range []string{filepath.Dir(dir), dir} {
+			if err := os.Chmod(path, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Chown(dir, frpcUID, frpcUID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestRunRestart(t *testing.T) {
+	dir := frpcTempDir(t)
 	starts := filepath.Join(dir, "starts")
 	bin := filepath.Join(dir, "frpc")
 	os.WriteFile(bin, []byte("#!/bin/sh\necho x >> "+starts+"\nexec sleep 60\n"), 0o755)
@@ -100,9 +125,15 @@ func TestRunRestart(t *testing.T) {
 	restart := make(chan struct{})
 	done := make(chan error)
 	go func() {
-		done <- Run(ctx, Config{Bin: bin, ConfigPath: filepath.Join(dir, "frpc.toml"), RelayAddr: "relay.test:7000", RelayCert: "PEM", Hosts: hosts}, restart)
+		done <- Run(ctx, Config{Bin: bin, ConfigPath: filepath.Join(dir, "frpc.toml"), RelayAddr: "relay.test:7000", RelayCert: "PEM", Token: "device-token", Hosts: hosts}, restart)
 	}()
 	waitFor(1)
+	if token, err := os.ReadFile(filepath.Join(dir, "relay.token")); err != nil || string(token) != "device-token" {
+		t.Fatal("frpc token source does not contain the device token")
+	}
+	if info, err := os.Stat(filepath.Join(dir, "relay.token")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatal("frpc token source is not private")
+	}
 	mu.Lock()
 	host = "b.u.farstu.test"
 	mu.Unlock()
@@ -119,18 +150,17 @@ func TestRunRestart(t *testing.T) {
 }
 
 // As root (the client's image), frpc runs as frpcUID and can still read its
-// config. Run with: docker run --rm -v "$PWD":/src -w /src golang:1.27 go test ./internal/frpc/
+// config. Run with: docker run --rm -v "$PWD":/src -w /src golang:1.27.3 go test ./internal/frpc/
 func TestRunDropsRoot(t *testing.T) {
 	if os.Getuid() != 0 {
 		t.Skip("needs root")
 	}
-	dir := t.TempDir()
-	os.Chmod(dir, 0o755) // frpc must reach its files, as in /data
+	dir := frpcTempDir(t)
 	out := filepath.Join(dir, "uid")
 	os.WriteFile(out, nil, 0o666)
 	os.Chmod(out, 0o666)
 	bin := filepath.Join(dir, "frpc")
-	os.WriteFile(bin, []byte("#!/bin/sh\ncat \"$2\" >/dev/null && id -u > "+out+"\nexec sleep 60\n"), 0o755)
+	os.WriteFile(bin, []byte("#!/bin/sh\ncat \"$2\" \""+filepath.Join(dir, "relay.token")+"\" >/dev/null && id -u > "+out+"\nexec sleep 60\n"), 0o755)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error)

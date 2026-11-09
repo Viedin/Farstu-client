@@ -53,6 +53,11 @@ on the internet could reach the page over IPv6. So there, the page only
 answers at `http://<your server's IPv4>:7080` from another device on your home
 network, and refuses IPv6 and `localhost`.
 
+Docker must be reachable when Farstu starts so it can check the local page's
+network safety. If it cannot identify its container network, it stops instead
+of serving the page. Keep `network_mode: host` and do not set a custom hostname
+on the Farstu container.
+
 ## Product principles
 
 1. **No extra login layer.** We rely on each app's own login and user
@@ -132,8 +137,10 @@ go test ./...
 docker build -t farstu-client .
 ```
 
-The image bundles a pinned `frpc` (checked against the release checksums)
-and frp's license under `/licenses/frp`.
+The image builds `frpc` from checksum-pinned stock frp source with patched
+Go and dependencies, and includes frp's license under `/licenses/frp`.
+Its file token source authenticates every relay work connection with the
+device token, sent only over the pinned TLS connection.
 
 ## App recipes
 

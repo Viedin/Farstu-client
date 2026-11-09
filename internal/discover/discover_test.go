@@ -423,28 +423,51 @@ func TestWatchUnsupported(t *testing.T) {
 // On a Docker network, the local page must know the gateways: Docker's
 // port proxy hands visitors on from them. On host networking, none.
 func TestGateways(t *testing.T) {
-	host, _ := os.Hostname()
-	self := ""
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("id") != host || self == "" {
-			http.NotFound(w, r)
-			return
-		}
-		fmt.Fprint(w, self)
-	})
-	sock := fakeDocker(t, mux)
-
-	for _, tt := range []struct{ name, self, want string }{
-		{"not a container", "", "[]"},
-		{"host networking", `{"HostConfig":{"NetworkMode":"host"},"NetworkSettings":{"Networks":{"host":{"Gateway":""}}}}`, "[]"},
-		{"bridge", `{"HostConfig":{"NetworkMode":"bridge"},"NetworkSettings":{"Networks":{"bridge":{"Gateway":"172.17.0.1","IPv6Gateway":"fd00::1"}}}}`, "[172.17.0.1 fd00::1]"},
+	const host = "aaaaaaaaaaaa"
+	const hostNetwork = `{"ID":"aaaaaaaaaaaa1234","HostConfig":{"NetworkMode":"host"}}`
+	const bridge = `{"ID":"aaaaaaaaaaaa1234","HostConfig":{"NetworkMode":"bridge"},"NetworkSettings":{"Networks":{"bridge":{"Gateway":"172.17.0.1","IPv6Gateway":"fd00::1"}}}}`
+	for _, tt := range []struct {
+		name, hostname, self string
+		inContainer          bool
+		status               int
+		want                 string
+		wantErr              bool
+	}{
+		{"native", "native-host", "", false, 404, "[]", false},
+		{"host networking", host, hostNetwork, true, 200, "[]", false},
+		{"bridge", host, bridge, true, 200, "[172.17.0.1 fd00::1]", false},
+		{"IPv6-only bridge", host, strings.Replace(bridge, `"172.17.0.1"`, `""`, 1), true, 200, "[fd00::1]", false},
+		{"custom hostname not found", "custom-name", "", true, 404, "", true},
+		{"custom hostname names another host-network container", "custom-name", hostNetwork, true, 200, "", true},
+		{"hostname is another container name", "different-container-name", hostNetwork, true, 200, "", true},
+		{"wrong container ID", "bbbbbbbbbbbb", hostNetwork, true, 200, "", true},
+		{"inspection fails in container", host, "", true, 503, "", true},
+		{"inspection fails natively", "native-host", "", false, 503, "", true},
+		{"no gateway", host, `{"ID":"aaaaaaaaaaaa1234","HostConfig":{"NetworkMode":"bridge"}}`, true, 200, "", true},
+		{"invalid gateway", host, strings.Replace(bridge, "172.17.0.1", "not-an-IP", 1), true, 200, "", true},
+		{"invalid Docker response", host, `{`, true, 200, "", true},
 	} {
-		self = tt.self
-		gws, err := Gateways(t.Context(), sock)
-		if got := fmt.Sprint(gws); err != nil || got != tt.want {
-			t.Errorf("%s: %s %v, want %s", tt.name, got, err, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /containers/{id}/json", func(w http.ResponseWriter, r *http.Request) {
+				if r.PathValue("id") != tt.hostname {
+					t.Errorf("inspected %s, want %s", r.PathValue("id"), tt.hostname)
+				}
+				w.WriteHeader(tt.status)
+				fmt.Fprint(w, tt.self)
+			})
+			sock := fakeDocker(t, mux)
+			gws, err := gateways(t.Context(), docker(sock), tt.hostname, tt.inContainer)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("unknown networking must fail closed")
+				}
+				return
+			}
+			if got := fmt.Sprint(gws); err != nil || got != tt.want {
+				t.Errorf("gateways: %s %v, want %s", got, err, tt.want)
+			}
+		})
 	}
 	if _, err := Gateways(t.Context(), filepath.Join(t.TempDir(), "missing.sock")); err == nil {
 		t.Error("no Docker: no error")
