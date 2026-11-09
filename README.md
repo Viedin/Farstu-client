@@ -55,8 +55,8 @@ network, and refuses IPv6 and `localhost`.
 
 Docker must be reachable when Farstu starts so it can check the local page's
 network safety. If it cannot identify its container network, it stops instead
-of serving the page. Keep `network_mode: host` and do not set a custom hostname
-on the Farstu container.
+of serving the page. Keep `network_mode: host`; container identification uses
+Docker's mount metadata, so custom hostnames also work.
 
 ## Product principles
 

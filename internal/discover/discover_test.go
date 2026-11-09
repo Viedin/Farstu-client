@@ -420,6 +420,54 @@ func TestWatchUnsupported(t *testing.T) {
 	}
 }
 
+func TestContainerID(t *testing.T) {
+	id := strings.Repeat("a", 64)
+	mount := "120 100 8:1 /var/lib/docker/containers/" + id + "/hostname /etc/hostname rw - ext4 /dev/sda1 rw\n"
+	for _, tt := range []struct {
+		name, mounts, want string
+	}{
+		{"Docker hostname mount", mount, id},
+		{"rootless Docker", strings.Replace(mount, "/var/lib/docker", "/home/user/.local/share/docker", 1), id},
+		{"unrelated mount", strings.Replace(mount, " /etc/hostname ", " /data/hostname ", 1), ""},
+		{"different source file", strings.ReplaceAll(mount, "/hostname", "/hosts"), ""},
+		{"invalid ID", strings.Replace(mount, id, strings.Repeat("z", 64), 1), ""},
+		{"short ID", strings.Replace(mount, id, id[:12], 1), ""},
+		{"no mount identity", "120 100 8:1 /hostname /etc/hostname rw - ext4 /dev/sda1 rw\n", ""},
+		{"malformed", "invalid mountinfo\n", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containerID([]byte(tt.mounts)); got != tt.want {
+				t.Fatalf("container ID %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Run in a Docker container with its socket mounted and this variable set
+// to its network mode: FARSTU_TEST_GATEWAYS=host or FARSTU_TEST_GATEWAYS=bridge.
+func TestGatewaysInDocker(t *testing.T) {
+	mode := os.Getenv("FARSTU_TEST_GATEWAYS")
+	if mode == "" {
+		t.Skip("needs a real Docker container and its Docker socket")
+	}
+	gws, err := Gateways(t.Context(), "/var/run/docker.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch mode {
+	case "host":
+		if len(gws) != 0 {
+			t.Fatalf("host networking has gateways %v", gws)
+		}
+	case "bridge":
+		if len(gws) == 0 {
+			t.Fatal("bridge networking must identify its forwarding gateways")
+		}
+	default:
+		t.Fatalf("unknown test network mode %q", mode)
+	}
+}
+
 // On a Docker network, the local page must know the gateways: Docker's
 // port proxy hands visitors on from them. On host networking, none.
 func TestGateways(t *testing.T) {

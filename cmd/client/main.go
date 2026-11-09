@@ -107,7 +107,7 @@ func run(ctx context.Context, server, dataDir, frpcBin, ca, uiAddr, dockerSock s
 	page := ui.Page{Disconnected: disconnected}
 	var gwErr error
 	if page.Forwarders, gwErr = discover.Gateways(ctx, dockerSock); gwErr != nil {
-		return fmt.Errorf("can't safely serve the local page: %w; check Docker access and use network_mode: host without a custom hostname", gwErr)
+		return fmt.Errorf("can't safely serve the local page: %w; check Docker access and container identity", gwErr)
 	} else if len(page.Forwarders) > 0 {
 		slog.Warn("not on host networking: the local page refuses what Docker's port proxy forwards (IPv6, localhost); use network_mode: host", "gateways", page.Forwarders)
 	}

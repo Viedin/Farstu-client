@@ -6,6 +6,7 @@ package discover
 import (
 	"cmp"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -90,9 +92,34 @@ func Gateways(ctx context.Context, socket string) ([]netip.Addr, error) {
 			return nil, err
 		}
 	}
+	if inContainer {
+		// Host networking and custom hostnames need not use the container ID.
+		// Docker's /etc/hostname mount identifies the container independently.
+		if mounts, err := os.ReadFile("/proc/self/mountinfo"); err == nil {
+			if self := containerID(mounts); self != "" {
+				id = self
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	return gateways(ctx, docker(socket), id, inContainer)
+}
+
+func containerID(mountinfo []byte) string {
+	for line := range strings.SplitSeq(string(mountinfo), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 || fields[4] != "/etc/hostname" || path.Base(fields[3]) != "hostname" {
+			continue
+		}
+		id := path.Base(path.Dir(fields[3]))
+		if len(id) == 64 {
+			if _, err := hex.DecodeString(id); err == nil {
+				return id
+			}
+		}
+	}
+	return ""
 }
 
 func gateways(ctx context.Context, c *http.Client, hostname string, inContainer bool) ([]netip.Addr, error) {
@@ -110,10 +137,10 @@ func gateways(ctx context.Context, c *http.Client, hostname string, inContainer 
 	if err != nil {
 		return nil, err
 	}
-	// A custom hostname may name an unrelated container. Require Docker's
-	// default ID hostname before trusting its network settings.
+	// A hostname may name an unrelated container. Require its actual ID
+	// before trusting the inspected network settings.
 	if inContainer && ((len(hostname) != 12 && len(hostname) != 64) || !strings.HasPrefix(self.ID, hostname)) {
-		return nil, errors.New("can't identify this container; keep Docker's default hostname (remove hostname from compose)")
+		return nil, errors.New("can't identify this container from its mounts or hostname")
 	}
 	if self.HostConfig.NetworkMode == "host" {
 		return nil, nil
